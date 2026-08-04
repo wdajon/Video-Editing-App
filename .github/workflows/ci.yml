@@ -1,4 +1,4 @@
-name: CI
+﻿name: CI
 
 on:
   push:
@@ -44,7 +44,7 @@ jobs:
             preset: linux-tsan
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux build tools
         if: runner.os == 'Linux'
@@ -110,7 +110,7 @@ jobs:
       # Checked out at the exact commit the manifest pins, so CI resolves the
       # same dependency versions a developer machine does.
       - name: Checkout vcpkg
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: microsoft/vcpkg
           ref: ${{ steps.vcpkg_baseline.outputs.sha }}
@@ -129,7 +129,7 @@ jobs:
         run: echo "VCPKG_ROOT=${{ github.workspace }}/vcpkg" >> "$GITHUB_ENV"
 
       - name: Cache vcpkg binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.os == 'Windows' && 'C:\Users\runneradmin\AppData\Local\vcpkg\archives' || '~/.cache/vcpkg/archives' }}
           key: vcpkg-${{ matrix.os }}-${{ hashFiles('vcpkg.json') }}

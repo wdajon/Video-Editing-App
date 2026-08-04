@@ -3,7 +3,22 @@
 ## M0 — Repo, CMake, dep manifest, CI, empty Qt shell
 
 **Exit gate:** clean clone → build → run on 2 OSes; CI green.
-**Gate status: NOT PASSED.** See "Blocking the gate" below.
+**Gate status: PASSED** — 2026-08-04, run
+[30891518538](https://github.com/wdajon/Video-Editing-App/actions/runs/30891518538)
+at `6a93924`, attempt 1, all six jobs green from a clean checkout:
+
+| Job | Result | Duration |
+|---|---|---|
+| Windows x64 Debug | success | 2.5 min |
+| Windows x64 Release | success | 2.6 min |
+| Linux x64 Debug | success | 1.8 min |
+| Linux x64 Release | success | 1.7 min |
+| Linux ASan+UBSan | success | 1.6 min |
+| Linux TSan | success | 1.7 min |
+
+Every job runs configure → build → `ctest` → both binaries executed, the GUI
+shell under the offscreen platform so a green run means it initialises rather
+than merely links.
 
 ### Iteration 1 — build system and core error handling
 
@@ -142,18 +157,27 @@ reading of the log. Re-running the failed job first cost one command and showed
 the theory was wrong. A deterministic-looking failure is not deterministic until
 it has failed twice.
 
-### Blocking the gate
+### Gate blockers, resolved
 
-1. **Never built on a second OS.** Windows only. Linux is configured for but
-   unproven; expect `-Wconversion`/`-Wold-style-cast` fallout on first contact.
-2. **CI has never run.** `.github/workflows/ci.yml` exists and is unexecuted —
-   there is no git remote. "CI green" is currently an unsupported claim (D3).
+| Raised | Blocker | Resolution |
+|---|---|---|
+| i1 | Never built on a second OS | Linux Debug/Release green on `ubuntu-24.04` with Clang |
+| i1 | CI never executed (D3) | Six-job matrix green; ASan, UBSan and TSan all run on real hardware |
+| i1 | No Qt shell | Delivered in iteration 2 |
 
-Item 3 of iteration 1 — "no Qt shell" — is cleared. Both remaining items are the
-same blocker wearing two hats: without a remote there is no CI, and without CI
-there is no second OS. Nothing else in M0 is outstanding.
+Local Linux verification was attempted first and abandoned on evidence: this
+machine's Ryzen 9 5900X reports `VirtualizationFirmwareEnabled: False`, so AMD-V
+is disabled in firmware and no hypervisor — WSL2 included — can start. CI runners
+are the substitute. `scripts/bootstrap_linux.sh` remains the local path for
+anyone whose firmware allows it.
+
+### Milestone closed
+
+M0 is complete. Remaining known defects (D1, D2, D4, D5) are tracked in
+`docs/BACKLOG.md`; none of them gate M0, and each is scheduled against the
+milestone that first depends on it.
 
 ### Next action
 
-Add the git remote once it exists, push, and fix whatever the Linux jobs report.
-Until then the M0 gate stays open and is reported as open.
+Begin M1 — media engine: probe, decode, frame-accurate seek. Exit gate: seek to
+any frame of a 10-minute 4K file with the decoded hash matching a reference.
