@@ -59,15 +59,48 @@ jobs:
       - name: Install Qt ${{ env.RF_QT_VERSION }}
         shell: bash
         run: |
+          set -euo pipefail
+          : "${GITHUB_WORKSPACE:?workspace path is required before deleting anything under it}"
+
           python3 -m pip install --upgrade aqtinstall
+
           if [ "$RUNNER_OS" = "Windows" ]; then
             host=windows; arch=win64_msvc2022_64; subdir=msvc2022_64
+            # cygpath keeps the path free of mixed separators; aqt is a native
+            # Windows Python and does not want a bash-style path.
+            qt_prefix="$(cygpath -m "$GITHUB_WORKSPACE")/Qt"
           else
             host=linux;   arch=linux_gcc_64;      subdir=gcc_64
+            qt_prefix="$GITHUB_WORKSPACE/Qt"
           fi
-          python3 -m aqt install-qt "$host" desktop "$RF_QT_VERSION" "$arch" \
-            -m qtshadertools qtimageformats -O "$GITHUB_WORKSPACE/Qt"
-          echo "QT_ROOT=$GITHUB_WORKSPACE/Qt/$RF_QT_VERSION/$subdir" >> "$GITHUB_ENV"
+
+          # aqtinstall extracts Qt's archives with py7zr and fails
+          # intermittently part-way through: observed as
+          #   py7zr.exceptions.Bad7zFile: Specified path is bad:
+          #     lib/cmake/Qt6Gui/Qt6QWebpPluginTargets-relwithdebinfo.cmake
+          # on one runner while the identical step succeeded on another in the
+          # same workflow run. A half-extracted tree is not resumable, so every
+          # attempt starts from a clean directory.
+          for attempt in 1 2 3; do
+            rm -rf "$qt_prefix"
+            if python3 -m aqt install-qt "$host" desktop "$RF_QT_VERSION" "$arch" \
+                 -m qtshadertools qtimageformats -O "$qt_prefix"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "aqt install-qt failed on all 3 attempts" >&2
+              exit 1
+            fi
+            echo "aqt install-qt failed (attempt $attempt of 3), retrying" >&2
+            sleep $((attempt * 15))
+          done
+
+          qt_root="$qt_prefix/$RF_QT_VERSION/$subdir"
+          if [ ! -f "$qt_root/lib/cmake/Qt6/Qt6Config.cmake" ]; then
+            echo "aqt reported success but Qt6Config.cmake is missing under $qt_root" >&2
+            exit 1
+          fi
+          echo "QT_ROOT=$qt_root" >> "$GITHUB_ENV"
 
       - name: Read vcpkg baseline from manifest
         id: vcpkg_baseline

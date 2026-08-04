@@ -21,8 +21,20 @@ $modules = @('qtshadertools', 'qtimageformats')
 python -m pip install --quiet --upgrade aqtinstall
 if ($LASTEXITCODE -ne 0) { throw "pip install aqtinstall failed" }
 
-python -m aqt install-qt windows desktop $Version $Arch -m $modules -O $Prefix
-if ($LASTEXITCODE -ne 0) { throw "aqt install-qt failed" }
+# aqtinstall's py7zr extraction fails intermittently part-way through (see the
+# comment in .github/workflows/ci.yml). A half-extracted tree is not resumable,
+# so every attempt starts from a clean directory.
+$versionDir = Join-Path $Prefix $Version
+for ($attempt = 1; $attempt -le 3; $attempt++) {
+    if (Test-Path $versionDir) { Remove-Item -Recurse -Force $versionDir }
+
+    python -m aqt install-qt windows desktop $Version $Arch -m $modules -O $Prefix
+    if ($LASTEXITCODE -eq 0) { break }
+
+    if ($attempt -eq 3) { throw "aqt install-qt failed on all 3 attempts" }
+    Write-Warning "aqt install-qt failed (attempt $attempt of 3), retrying"
+    Start-Sleep -Seconds ($attempt * 15)
+}
 
 $qtRoot = Join-Path $Prefix "$Version\msvc2022_64"
 if (-not (Test-Path (Join-Path $qtRoot 'lib\cmake\Qt6\Qt6Config.cmake'))) {

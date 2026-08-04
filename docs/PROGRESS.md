@@ -96,6 +96,52 @@ exists yet.
    relied on a CTest environment property instead, discovery would have failed
    the same way — noted in `tests/app/main.cpp`.
 
+### Iteration 3 — first CI run against real Linux
+
+**Increment:** push to a remote and let the six-job matrix compile this code with
+a compiler other than MSVC for the first time.
+
+**Result — the prediction was wrong, in the good direction.** Iterations 1 and 2
+both recorded an expectation that Clang would reject code MSVC accepted, because
+`-Wconversion`, `-Wsign-conversion` and `-Wold-style-cast` had never run against
+it. All four Linux jobs passed on the first attempt, including the moc-generated
+sources that were called out as the most likely casualty:
+
+```
+[success] Linux x64 Debug        [success] Linux ASan+UBSan
+[success] Linux x64 Release      [success] Linux TSan
+```
+
+ASan+UBSan and TSan passing on real hardware retires the "sanitizers are defined
+but have never been run" caveat carried since iteration 1 (D3).
+
+**What did break was the CI script, not the code.** The Windows job failed before
+compiling anything, in the Qt install step:
+
+```
+py7zr.exceptions.Bad7zFile: Specified path is bad:
+  lib/cmake/Qt6Gui/Qt6QWebpPluginTargets-relwithdebinfo.cmake
+```
+
+The first hypothesis was a path defect: the workflow built the install prefix by
+appending `/Qt` to a Windows `$GITHUB_WORKSPACE`, producing the mixed-separator
+`D:\a\Video-Editing-App\Video-Editing-App/Qt`. That hypothesis was **wrong** —
+the Windows Release job ran the identical step in the same workflow run and
+succeeded. The failure is intermittent extraction inside aqtinstall's bundled
+py7zr, not anything deterministic about our inputs.
+
+Fixed by retrying the install up to three times, wiping the partially extracted
+tree first because it is not resumable, and failing loudly if `Qt6Config.cmake`
+is still absent afterwards. The same retry is applied to `scripts/install_qt.ps1`
+and `scripts/bootstrap_linux.sh` so all three acquisition paths behave alike. The
+mixed separator was tidied with `cygpath` as well — it was not the bug, but it
+was sloppy.
+
+**Method note:** the first fix was nearly applied on the strength of a plausible
+reading of the log. Re-running the failed job first cost one command and showed
+the theory was wrong. A deterministic-looking failure is not deterministic until
+it has failed twice.
+
 ### Blocking the gate
 
 1. **Never built on a second OS.** Windows only. Linux is configured for but

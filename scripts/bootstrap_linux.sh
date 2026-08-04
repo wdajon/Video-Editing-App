@@ -65,8 +65,24 @@ if [ ! -f "$QT_ROOT_DIR/lib/cmake/Qt6/Qt6Config.cmake" ]; then
         python3 -m venv "$AQT_VENV"
     fi
     "$AQT_VENV/bin/pip" install --quiet --upgrade aqtinstall
-    "$AQT_VENV/bin/python" -m aqt install-qt linux desktop "$QT_VERSION" "$QT_ARCH" \
-        -m qtshadertools qtimageformats -O "$QT_PREFIX"
+
+    # aqtinstall's py7zr extraction fails intermittently part-way through (see
+    # the comment in .github/workflows/ci.yml). A half-extracted tree is not
+    # resumable, so every attempt starts from a clean directory.
+    : "${QT_PREFIX:?refusing to delete an empty path}"
+    for attempt in 1 2 3; do
+        rm -rf "${QT_PREFIX:?}/$QT_VERSION"
+        if "$AQT_VENV/bin/python" -m aqt install-qt linux desktop "$QT_VERSION" "$QT_ARCH" \
+             -m qtshadertools qtimageformats -O "$QT_PREFIX"; then
+            break
+        fi
+        if [ "$attempt" -eq 3 ]; then
+            echo "aqt install-qt failed on all 3 attempts" >&2
+            exit 1
+        fi
+        echo "aqt install-qt failed (attempt $attempt of 3), retrying" >&2
+        sleep $((attempt * 15))
+    done
 fi
 if [ ! -f "$QT_ROOT_DIR/lib/cmake/Qt6/Qt6Config.cmake" ]; then
     echo "Qt install finished but Qt6Config.cmake is missing under $QT_ROOT_DIR" >&2
