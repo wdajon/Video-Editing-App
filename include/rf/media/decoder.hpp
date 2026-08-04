@@ -69,6 +69,16 @@ public:
     /// counts work done, not position.
     [[nodiscard]] std::int64_t frames_decoded() const noexcept;
 
+    /// Number of frames copied out of libav into an owned buffer.
+    ///
+    /// Exposed for tests, and it earns its place: a seek decodes many frames to
+    /// reach its target but must materialise only the one it was asked for.
+    /// Copying the discarded frames too is invisible to every correctness test
+    /// and cost a 5.8x seek slowdown at 4K before it was found by measurement.
+    /// Asserting on this counter catches that regression deterministically, at
+    /// any resolution, without timing anything.
+    [[nodiscard]] std::int64_t frames_materialised() const noexcept;
+
 private:
     class Impl;
     explicit VideoDecoder(std::unique_ptr<Impl> impl) noexcept;

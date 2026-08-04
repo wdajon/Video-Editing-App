@@ -70,6 +70,37 @@ The 30 fps fixture cut to half its length **with raw byte IO, not with ffmpeg**,
 so the damage is genuine rather than a clean re-mux of a shorter clip. Exercises
 the malformed-media path the robustness rubric asks about.
 
+## Large sources (not committed)
+
+The M1 exit gate names a 10-minute 4K file. At 2.9 GB that cannot live in git,
+so it is generated on demand and checked with `rf_seek_check` rather than by the
+unit suite — 18,000 exhaustive seeks through a 250-frame GOP would be millions of
+4K frame decodes.
+
+```bash
+ffmpeg -f lavfi -i "testsrc2=size=3840x2160:rate=30:duration=600" \
+       -c:v libx264 -preset ultrafast -pix_fmt yuv420p -g 250 -crf 30 -an \
+       -movflags +faststart testsrc2_3840x2160_30fps_600s.mp4
+
+rf_seek_check testsrc2_3840x2160_30fps_600s.mp4 --seeks 200
+```
+
+| Property | Value |
+|---|---|
+| resolution | 3840x2160 |
+| frame rate | 30/1, constant |
+| GOP | 250 — a seek may decode ~249 frames forward |
+| frames | 18,000 |
+| time base | 1/15360 |
+| size | 2.9 GB |
+
+**What this file does not test.** `testsrc2` is constant frame rate with clean,
+monotonic timestamps. It exercises scale and long-GOP seeking, and nothing else.
+Variable frame rate, B-pyramids, non-monotonic or missing timestamps, rotation
+metadata, and mixed-codec containers — the things real camera and screen-capture
+footage carries, and where frame-accurate seeking actually breaks — are not
+covered by any fixture here. That is a stated gap, not an oversight.
+
 ## `not_media.mp4` (25 bytes)
 
 ASCII text with a video extension. Exercises the "user picked the wrong file"

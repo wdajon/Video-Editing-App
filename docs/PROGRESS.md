@@ -3,8 +3,61 @@
 ## M1 — Media engine: probe, decode, frame-accurate seek
 
 **Exit gate:** seek to any frame of a 10-minute 4K file; decoded hash matches a
-reference. **Gate status: NOT PASSED** — iteration 1 lays the time model the
-gate depends on; nothing decodes yet.
+reference.
+
+**Gate status: PASSED for accuracy, performance budget NOT met.**
+
+Measured 2026-08-04 on the reference machine (AMD Ryzen 9 5900X, 12 cores;
+Windows 11; RelWithDebInfo; source on a local drive) against
+`testsrc2_3840x2160_30fps_600s.mp4` — 10 minutes, 3840x2160, 30/1, GOP 250,
+18,000 frames, 2.9 GB, generated per `tests/fixtures/media/README.md`:
+
+```
+linear decode: 18000 frames in 260.1 s (69.2 fps), 18000 distinct hashes
+seeks: 200  mismatches: 0
+latency ms  mean 193.7  p50 189.4  p95 348.8  p99 355.2  max 373.7  (budget 150)
+accuracy: PASS
+budget:   FAIL
+```
+
+200 random seeks, zero mismatches, against a linear-decode reference in which
+all 18,000 hashes are distinct — so the comparison cannot pass vacuously. That
+is the exit gate as written, and it is met.
+
+The 150 ms random-seek budget from the performance section is **not** met.
+
+### Seek latency baseline (reference machine)
+
+| Change | mean | p99 | Notes |
+|---|---|---|---|
+| As first measured | 1133 ms | 2534 ms | Single-threaded decode; every discarded frame copied |
+| + decoder threading | 519 ms | 1119 ms | `thread_count = 0` was never set — a defect, not a tuning knob |
+| + no copy of discarded frames | **194 ms** | **355 ms** | Seek scan reads timestamps off the `AVFrame` and unrefs |
+
+5.8x faster overall, and still 2.4x over budget. The remainder is not reachable
+by tuning this loop: an average seek must decode ~125 frames of 4K, and CPU
+H.264 will not do that in 150 ms at 2160p. Tracked as **D9**, owned by M3, whose
+fix is hardware decode plus proxy media.
+
+**Two predictions I got wrong, both corrected only by measuring.** Threading was
+predicted at ~8x and delivered 1.33x on linear decode. The discarded-frame copy
+was recorded in the backlog as an M3 concern and was in fact the dominant cost at
+M1. Neither was visible to 140 passing tests or five green CI runs, because
+nothing measured throughput.
+
+### Guarding the fixes
+
+`rf_seek_check` is a manual tool, so on its own it guards nothing. Two mechanical
+checks now stand behind these results:
+
+- **`SeekCost` tests** assert that a seek materialises exactly **one** frame,
+  counting copies rather than milliseconds. Deterministic, resolution-independent,
+  and immune to CI timing noise — this is what actually catches the copy
+  regression coming back.
+- **CI runs `rf_seek_check`** on the committed fixtures on every optimised build,
+  proving accuracy on each commit. It cannot prove the 4K budget: the fixtures
+  are 320x240 and the real source is 2.9 GB. That limitation is stated rather
+  than papered over.
 
 ### Iteration 3 — sequential decode and frame hashing
 

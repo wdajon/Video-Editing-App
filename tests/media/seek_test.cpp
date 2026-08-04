@@ -224,6 +224,64 @@ TEST(Seek, SeekingToZeroRewindsAFullyDrainedDecoder) {
     EXPECT_EQ(hash, reference.hashes[0]);
 }
 
+// --- cost of a seek ----------------------------------------------------------
+// These are performance regression tests that assert on a counter rather than a
+// clock, so they are deterministic, resolution-independent, and safe to run on a
+// noisy CI machine. A stopwatch here would either flap or be too loose to catch
+// anything.
+
+TEST(SeekCost, MaterialisesOnlyTheFrameActuallyRequested) {
+    // A seek decodes every frame from the preceding keyframe to the target, but
+    // must copy only the one it was asked for. Copying the discarded frames too
+    // is invisible to every correctness test in this file and cost a 5.8x seek
+    // slowdown at 4K before measurement found it.
+    auto decoder = VideoDecoder::open(fixture(kCfrFixture));
+    ASSERT_TRUE(decoder.has_value()) << decoder.error().to_string();
+
+    // Frame 44 sits well inside a GOP, so reaching it decodes several frames.
+    ASSERT_TRUE(decoder.value().seek_to_frame(44).has_value());
+    EXPECT_EQ(decoder.value().frames_materialised(), 1)
+        << "seeking copied frames it then discarded";
+
+    auto frame = decoder.value().next_frame();
+    ASSERT_TRUE(frame.has_value()) << frame.error().to_string();
+    ASSERT_TRUE(frame.value().has_value());
+    EXPECT_EQ(decoder.value().frames_materialised(), 1)
+        << "the pending frame was copied twice";
+}
+
+TEST(SeekCost, RepeatedSeeksDoNotAccumulateCopies) {
+    auto decoder = VideoDecoder::open(fixture(kNtscFixture));
+    ASSERT_TRUE(decoder.has_value()) << decoder.error().to_string();
+
+    constexpr std::int64_t kSeeks = 10;
+    for (std::int64_t i = 0; i < kSeeks; ++i) {
+        ASSERT_TRUE(decoder.value().seek_to_frame(i * 5 + 3).has_value());
+        auto frame = decoder.value().next_frame();
+        ASSERT_TRUE(frame.has_value()) << frame.error().to_string();
+        ASSERT_TRUE(frame.value().has_value());
+    }
+    EXPECT_EQ(decoder.value().frames_materialised(), kSeeks)
+        << "each seek should copy exactly one frame";
+}
+
+TEST(SeekCost, LinearDecodeMaterialisesEachFrameExactlyOnce) {
+    auto decoder = VideoDecoder::open(fixture(kCfrFixture));
+    ASSERT_TRUE(decoder.has_value()) << decoder.error().to_string();
+
+    std::int64_t frames = 0;
+    for (;;) {
+        auto frame = decoder.value().next_frame();
+        ASSERT_TRUE(frame.has_value()) << frame.error().to_string();
+        if (!frame.value().has_value()) {
+            break;
+        }
+        ++frames;
+    }
+    EXPECT_EQ(frames, kFixtureFrames);
+    EXPECT_EQ(decoder.value().frames_materialised(), kFixtureFrames);
+}
+
 // --- failure paths -----------------------------------------------------------
 
 TEST(Seek, NegativeFrameIndexIsRejected) {

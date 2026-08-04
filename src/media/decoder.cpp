@@ -93,8 +93,13 @@ public:
     /// target, and the frame it lands on must not be thrown away.
     std::optional<VideoFrame> pending;
 
+    /// Counts calls to take_current_frame -- that is, full-frame copies out of
+    /// libav. See VideoDecoder::frames_materialised.
+    std::int64_t frames_materialised = 0;
+
     /// Copies the current AVFrame into an owned, tightly packed VideoFrame.
     [[nodiscard]] Result<VideoFrame> take_current_frame() {
+        ++frames_materialised;
         const auto pixel_format = static_cast<AVPixelFormat>(frame->format);
         const char* format_name = av_get_pix_fmt_name(pixel_format);
         if (format_name == nullptr) {
@@ -219,29 +224,54 @@ public:
         finished = false;
         pending.reset();
 
+        // The scan below deliberately does NOT go through decode_next_raw().
+        //
+        // Frames between the keyframe and the target must be decoded -- the
+        // codec needs them -- but they are never handed to anyone, so copying
+        // each one into a packed buffer is pure waste. At 4K that is 12.4 MB
+        // per discarded frame, and a 250-frame GOP discards up to 249 of them,
+        // which was over a gigabyte of memcpy per seek before this loop existed.
+        // Only the frame actually being sought is materialised.
         for (;;) {
-            Result<std::optional<VideoFrame>> decoded = decode_next_raw();
-            if (!decoded) {
-                return decoded.error();
-            }
-            if (!decoded.value().has_value()) {
-                return Error{Errc::not_found,
-                             "seek target " + std::to_string(target) + " is past the last frame"};
-            }
+            const int receive_result = avcodec_receive_frame(codec.get(), frame.get());
 
-            VideoFrame candidate = std::move(decoded).value().value();
-            if (!candidate.presentation_timestamp.has_value()) {
-                return Error{Errc::corrupt_data,
-                             "cannot seek accurately: decoded frame has no timestamp"};
-            }
-            if (candidate.presentation_timestamp.value() >= target) {
+            if (receive_result == 0) {
+                const std::int64_t timestamp = frame->best_effort_timestamp != AV_NOPTS_VALUE
+                                                   ? frame->best_effort_timestamp
+                                                   : frame->pts;
+                if (timestamp == AV_NOPTS_VALUE) {
+                    av_frame_unref(frame.get());
+                    return Error{Errc::corrupt_data,
+                                 "cannot seek accurately: decoded frame has no timestamp"};
+                }
+                if (timestamp < target) {
+                    av_frame_unref(frame.get());
+                    continue;
+                }
+
+                Result<VideoFrame> decoded = take_current_frame();
+                av_frame_unref(frame.get());
+                if (!decoded) {
+                    return decoded.error();
+                }
+                VideoFrame candidate = std::move(decoded).value();
                 candidate.frame_index = index_at_target;
                 pending = std::move(candidate);
                 next_index = index_at_target + 1;
                 return ok();
             }
-            // Between the keyframe and the target: decoded because the codec
-            // needs it, discarded because the caller did not ask for it.
+
+            if (receive_result == AVERROR_EOF) {
+                finished = true;
+                return Error{Errc::not_found,
+                             "seek target " + std::to_string(target) + " is past the last frame"};
+            }
+            if (receive_result != AVERROR(EAGAIN)) {
+                return detail::from_libav(receive_result, "decoder failed while seeking");
+            }
+            if (Result<void> fed = feed_decoder(); !fed) {
+                return fed.error();
+            }
         }
     }
 };
@@ -302,6 +332,13 @@ Result<VideoDecoder> VideoDecoder::open(const std::filesystem::path& path) {
     }
     impl->codec->pkt_timebase = stream->time_base;
 
+    // Without this libav decodes on a single thread, which leaves most of the
+    // machine idle and makes 4K seeking an order of magnitude slower than the
+    // hardware allows. thread_count 0 asks libav to pick based on the CPU;
+    // decoders that cannot honour a threading mode silently ignore it.
+    impl->codec->thread_count = 0;
+    impl->codec->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+
     const int codec_open_result = avcodec_open2(impl->codec.get(), codec, nullptr);
     if (codec_open_result < 0) {
         return detail::from_libav(codec_open_result, "cannot open decoder");
@@ -322,6 +359,10 @@ const StreamInfo& VideoDecoder::stream() const noexcept {
 
 std::int64_t VideoDecoder::frames_decoded() const noexcept {
     return impl_->frames_decoded;
+}
+
+std::int64_t VideoDecoder::frames_materialised() const noexcept {
+    return impl_->frames_materialised;
 }
 
 Result<std::optional<VideoFrame>> VideoDecoder::next_frame() {

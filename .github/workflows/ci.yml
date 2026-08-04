@@ -161,6 +161,25 @@ jobs:
         run: ./build/${{ matrix.preset }}/bin/rf_version
         shell: bash
 
+      # Accuracy regression check on every commit. Runs only on the optimised
+      # builds: sanitizer and debug configurations are several times slower and
+      # would make the latency ceiling meaningless.
+      #
+      # This proves seek ACCURACY, not the 150 ms 4K budget -- the committed
+      # fixtures are 320x240 and the real target needs a 2.9 GB source that
+      # cannot live in CI. The budget below is a loose ceiling that catches an
+      # order-of-magnitude regression, nothing finer. Frame-copy regressions are
+      # caught deterministically by the SeekCost tests instead, which count
+      # copies rather than milliseconds. See defect D9 in docs/BACKLOG.md.
+      - name: Seek accuracy check
+        if: endsWith(matrix.preset, 'release')
+        shell: bash
+        run: |
+          for f in bars_320x240_30fps_h264_aac.mp4 bars_320x240_2997fps_h264.mp4; do
+            ./build/${{ matrix.preset }}/bin/rf_seek_check \
+              "tests/fixtures/media/$f" --seeks 300 --budget-ms 250
+          done
+
       - name: Smoke run (application shell)
         shell: bash
         env:
