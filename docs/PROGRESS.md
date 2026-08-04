@@ -6,6 +6,52 @@
 reference. **Gate status: NOT PASSED** — iteration 1 lays the time model the
 gate depends on; nothing decodes yet.
 
+### Iteration 3 — sequential decode and frame hashing
+
+**Increment:** walk a file's video stream frame by frame, and hash frames
+reproducibly. Linear decode is not just a feature — it is the **oracle** the
+next increment's seek accuracy is measured against.
+
+**Falsifiable check:** a 60-frame fixture yields exactly 60 frames; NTSC frame
+spacing is exactly 1001 ticks in a 1/30000 base with no drift across the file;
+decoding the same file twice yields identical hashes; and all 60 hashes are
+distinct.
+
+**Verified (2026-08-04, MSVC 19.44.35228, FFmpeg 8.1.2, Debug):**
+
+```
+100% tests passed, 0 tests failed out of 130
+app = 10 tests    core = 48 tests    media = 72 tests
+```
+
+**Design decisions worth recording:**
+
+- **Draining is explicit.** Codecs with B-frames hold frames back until told the
+  stream ended. A decoder that omits the null-packet flush loses the last frames
+  of every file, and loses them *silently*. `DecodesEveryFrameIncludingTheOnes
+  HeldBackForReordering` exists to fail if that flush is ever removed.
+- **End of stream is `Result<optional<VideoFrame>>`.** Running out of frames is
+  an outcome, not a fault; making it an error code would force every caller to
+  special-case a sentinel and would eventually get mistaken for a real failure.
+- **Frames are tightly packed** (`av_image_copy_to_buffer`, alignment 1). Stride
+  padding is uninitialised memory that varies by platform and decoder build; if
+  it reached the hash, the seek oracle would produce false mismatches and there
+  would be no way to tell them from real ones.
+- **`best_effort_timestamp` over raw `pts`,** because raw pts is frequently
+  absent on the first frames of a stream.
+- **Every libav resource has an RAII owner** and there are no bare `av_*_free`
+  calls in `decoder.cpp`. The error paths are numerous and each one returns
+  early; this is what keeps them leak-free without per-path cleanup.
+- **`describe_stream` was lifted out of `probe.cpp` into a shared internal
+  unit.** The decoder must describe its stream identically to the probe;
+  two translations drifting apart would mean a file reports one frame rate when
+  inspected and a different one when played.
+
+**Two tests exist to stop the next increment passing vacuously.**
+`FrameHash.IsDeterministicAcrossDecodes` and `FrameHash.DistinguishesDifferent
+Frames` establish that the hash actually separates frames. Without them, a seek
+test comparing hashes could pass while proving nothing at all.
+
 ### Iteration 2 — probe
 
 **Increment:** open a container, describe its streams, close it. No decoding, no

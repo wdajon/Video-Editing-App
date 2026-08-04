@@ -21,6 +21,7 @@ gtest_discover_tests(rf_core_tests
     PROPERTIES LABELS "core")
 
 add_executable(rf_media_tests
+    media/decoder_test.cpp
     media/probe_test.cpp
     media/rational_test.cpp)
 

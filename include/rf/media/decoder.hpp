@@ -1,0 +1,59 @@
+// Sequential video decoding.
+//
+// M1 scope: open a file, walk its video stream frame by frame. Seeking arrives
+// in the next increment and is built on this, because linear decode is the
+// oracle seek accuracy is measured against.
+
+#ifndef RF_MEDIA_DECODER_HPP
+#define RF_MEDIA_DECODER_HPP
+
+#include <filesystem>
+#include <memory>
+#include <optional>
+
+#include "rf/core/result.hpp"
+#include "rf/media/media_info.hpp"
+#include "rf/media/video_frame.hpp"
+
+namespace rf::media {
+
+/// Decodes the video stream of a media file, in order.
+///
+/// Move-only: it owns a demuxer and a decoder context, and copying those is
+/// meaningless. All libav state is behind a pimpl so that no libav type appears
+/// in this header (ADR 004).
+class VideoDecoder {
+public:
+    /// Opens `path` and selects its best video stream. Fails if the file cannot
+    /// be read, contains no video, or uses a codec this build lacks.
+    [[nodiscard]] static Result<VideoDecoder> open(const std::filesystem::path& path);
+
+    VideoDecoder(VideoDecoder&&) noexcept;
+    VideoDecoder& operator=(VideoDecoder&&) noexcept;
+    VideoDecoder(const VideoDecoder&) = delete;
+    VideoDecoder& operator=(const VideoDecoder&) = delete;
+    ~VideoDecoder();
+
+    /// Description of the stream being decoded.
+    [[nodiscard]] const StreamInfo& stream() const noexcept;
+
+    /// Decodes the next frame in presentation order.
+    ///
+    /// Returns an empty optional at end of stream -- which is an outcome, not a
+    /// failure, and is why this is `Result<optional<Frame>>` rather than an
+    /// error code that callers would have to special-case.
+    [[nodiscard]] Result<std::optional<VideoFrame>> next_frame();
+
+    /// Number of frames returned so far. The honest count, as opposed to
+    /// whatever the container claimed.
+    [[nodiscard]] std::int64_t frames_decoded() const noexcept;
+
+private:
+    class Impl;
+    explicit VideoDecoder(std::unique_ptr<Impl> impl) noexcept;
+    std::unique_ptr<Impl> impl_;
+};
+
+}  // namespace rf::media
+
+#endif  // RF_MEDIA_DECODER_HPP
