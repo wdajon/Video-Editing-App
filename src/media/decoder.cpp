@@ -83,6 +83,16 @@ public:
     bool finished = false;
     std::int64_t frames_decoded = 0;
 
+    /// Index to assign to the next frame handed out. Distinct from
+    /// frames_decoded, which counts work done: after a seek, position and
+    /// work-done are no longer the same number.
+    std::int64_t next_index = 0;
+
+    /// A frame already decoded during a seek, waiting to be handed to the
+    /// caller. Seeking has to decode forward past the keyframe to reach the
+    /// target, and the frame it lands on must not be thrown away.
+    std::optional<VideoFrame> pending;
+
     /// Copies the current AVFrame into an owned, tightly packed VideoFrame.
     [[nodiscard]] Result<VideoFrame> take_current_frame() {
         const auto pixel_format = static_cast<AVPixelFormat>(frame->format);
@@ -108,7 +118,6 @@ public:
 
         VideoFrame out{frame->width, frame->height, std::string{format_name}, std::move(pixels)};
         out.time_base = stream_info.time_base;
-        out.frame_index = frames_decoded;
 
         // best_effort_timestamp reconciles pts and dts and is what playback
         // should trust; a raw pts is frequently absent on the first frames.
@@ -158,6 +167,82 @@ public:
             return detail::from_libav(send_result, "decoder rejected packet");
         }
         return ok();
+    }
+
+    /// Pulls the next frame out of the decoder, feeding it packets as needed.
+    /// Carries no notion of position; index assignment belongs to the caller.
+    [[nodiscard]] Result<std::optional<VideoFrame>> decode_next_raw() {
+        if (finished) {
+            return std::optional<VideoFrame>{};
+        }
+
+        for (;;) {
+            const int receive_result = avcodec_receive_frame(codec.get(), frame.get());
+            if (receive_result == 0) {
+                Result<VideoFrame> decoded = take_current_frame();
+                av_frame_unref(frame.get());
+                if (!decoded) {
+                    return decoded.error();
+                }
+                return std::optional<VideoFrame>{std::move(decoded).value()};
+            }
+
+            if (receive_result == AVERROR_EOF) {
+                // End of stream is an outcome, not a failure.
+                finished = true;
+                return std::optional<VideoFrame>{};
+            }
+
+            if (receive_result != AVERROR(EAGAIN)) {
+                return detail::from_libav(receive_result, "decoder failed");
+            }
+
+            if (Result<void> fed = feed_decoder(); !fed) {
+                return fed.error();
+            }
+        }
+    }
+
+    /// Seeks to the keyframe at or before `target`, then decodes forward to the
+    /// first frame at or after it, leaving that frame pending.
+    [[nodiscard]] Result<void> seek_and_decode_to(std::int64_t target, std::int64_t index_at_target) {
+        const int seek_result =
+            av_seek_frame(format.get(), stream_index, target, AVSEEK_FLAG_BACKWARD);
+        if (seek_result < 0) {
+            return detail::from_libav(seek_result, "cannot seek");
+        }
+
+        // Without this the decoder keeps state from before the jump and emits
+        // frames belonging to the previous position.
+        avcodec_flush_buffers(codec.get());
+        draining = false;
+        finished = false;
+        pending.reset();
+
+        for (;;) {
+            Result<std::optional<VideoFrame>> decoded = decode_next_raw();
+            if (!decoded) {
+                return decoded.error();
+            }
+            if (!decoded.value().has_value()) {
+                return Error{Errc::not_found,
+                             "seek target " + std::to_string(target) + " is past the last frame"};
+            }
+
+            VideoFrame candidate = std::move(decoded).value().value();
+            if (!candidate.presentation_timestamp.has_value()) {
+                return Error{Errc::corrupt_data,
+                             "cannot seek accurately: decoded frame has no timestamp"};
+            }
+            if (candidate.presentation_timestamp.value() >= target) {
+                candidate.frame_index = index_at_target;
+                pending = std::move(candidate);
+                next_index = index_at_target + 1;
+                return ok();
+            }
+            // Between the keyframe and the target: decoded because the codec
+            // needs it, discarded because the caller did not ask for it.
+        }
     }
 };
 
@@ -240,36 +325,67 @@ std::int64_t VideoDecoder::frames_decoded() const noexcept {
 }
 
 Result<std::optional<VideoFrame>> VideoDecoder::next_frame() {
-    if (impl_->finished) {
+    if (impl_->pending.has_value()) {
+        VideoFrame frame = std::move(impl_->pending).value();
+        impl_->pending.reset();
+        ++impl_->frames_decoded;
+        return std::optional<VideoFrame>{std::move(frame)};
+    }
+
+    Result<std::optional<VideoFrame>> decoded = impl_->decode_next_raw();
+    if (!decoded) {
+        return decoded.error();
+    }
+    if (!decoded.value().has_value()) {
         return std::optional<VideoFrame>{};
     }
 
-    for (;;) {
-        const int receive_result = avcodec_receive_frame(impl_->codec.get(), impl_->frame.get());
-        if (receive_result == 0) {
-            Result<VideoFrame> frame = impl_->take_current_frame();
-            av_frame_unref(impl_->frame.get());
-            if (!frame) {
-                return frame.error();
-            }
-            ++impl_->frames_decoded;
-            return std::optional<VideoFrame>{std::move(frame).value()};
-        }
+    VideoFrame frame = std::move(decoded).value().value();
+    frame.frame_index = impl_->next_index;
+    ++impl_->next_index;
+    ++impl_->frames_decoded;
+    return std::optional<VideoFrame>{std::move(frame)};
+}
 
-        if (receive_result == AVERROR_EOF) {
-            // End of stream is an outcome, not a failure.
-            impl_->finished = true;
-            return std::optional<VideoFrame>{};
-        }
+Result<void> VideoDecoder::seek_to_timestamp(std::int64_t timestamp) {
+    // Index is unknowable from a bare timestamp on variable-rate material, so
+    // counting resumes from wherever the seek lands rather than claiming a
+    // position the stream cannot justify.
+    return impl_->seek_and_decode_to(timestamp, impl_->next_index);
+}
 
-        if (receive_result != AVERROR(EAGAIN)) {
-            return detail::from_libav(receive_result, "decoder failed");
-        }
-
-        if (Result<void> fed = impl_->feed_decoder(); !fed) {
-            return fed.error();
-        }
+Result<void> VideoDecoder::seek_to_frame(std::int64_t index) {
+    if (index < 0) {
+        return Error{Errc::invalid_argument,
+                     "frame index must not be negative: " + std::to_string(index)};
     }
+
+    const std::optional<VideoStreamInfo>& video = impl_->stream_info.video;
+    if (!video.has_value() || !video->average_frame_rate.has_value()) {
+        return Error{Errc::unsupported_format,
+                     "stream states no frame rate, so frame indices have no meaning; "
+                     "use seek_to_timestamp"};
+    }
+    if (impl_->stream_info.time_base.is_zero()) {
+        return Error{Errc::corrupt_data, "stream has an unusable time base"};
+    }
+
+    // Frame N starts at N frame-durations after the stream's start. Computed
+    // through exact rational arithmetic: doing this in floating point is
+    // precisely how a seek lands one frame off on 29.97 material.
+    Result<Rational> frame_duration = video->average_frame_rate->inverse();
+    if (!frame_duration) {
+        return frame_duration.error().with_context("seek_to_frame");
+    }
+
+    Result<std::int64_t> offset =
+        rescale(index, frame_duration.value(), impl_->stream_info.time_base, Rounding::nearest);
+    if (!offset) {
+        return offset.error().with_context("seek_to_frame");
+    }
+
+    const std::int64_t start = impl_->stream_info.start_time.value_or(0);
+    return impl_->seek_and_decode_to(start + offset.value(), index);
 }
 
 }  // namespace rf::media

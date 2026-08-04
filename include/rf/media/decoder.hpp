@@ -44,8 +44,29 @@ public:
     /// error code that callers would have to special-case.
     [[nodiscard]] Result<std::optional<VideoFrame>> next_frame();
 
-    /// Number of frames returned so far. The honest count, as opposed to
-    /// whatever the container claimed.
+    /// Positions the decoder so the next `next_frame()` returns exactly frame
+    /// `index`, counting from zero at the start of the stream.
+    ///
+    /// Frame-accurate, not keyframe-accurate: it seeks to the keyframe at or
+    /// before the target and decodes forward to the exact frame, because
+    /// landing on the nearest keyframe and calling it a seek is how an editor
+    /// cuts in the wrong place.
+    ///
+    /// Requires the stream to state a frame rate. Variable-frame-rate material
+    /// has no frame-index-to-time mapping, so this reports an error there
+    /// rather than inventing one -- use `seek_to_timestamp` instead.
+    [[nodiscard]] Result<void> seek_to_frame(std::int64_t index);
+
+    /// Positions the decoder at the first frame whose presentation timestamp is
+    /// at or after `timestamp`, expressed in `stream().time_base` units.
+    ///
+    /// "At or after", not "containing": a playhead in ReelForge sits on a frame
+    /// boundary, and containment semantics belong with the timeline model.
+    [[nodiscard]] Result<void> seek_to_timestamp(std::int64_t timestamp);
+
+    /// Number of frames returned to the caller so far. The honest count, as
+    /// opposed to whatever the container claimed. Not reset by seeking -- it
+    /// counts work done, not position.
     [[nodiscard]] std::int64_t frames_decoded() const noexcept;
 
 private:

@@ -23,7 +23,8 @@ gtest_discover_tests(rf_core_tests
 add_executable(rf_media_tests
     media/decoder_test.cpp
     media/probe_test.cpp
-    media/rational_test.cpp)
+    media/rational_test.cpp
+    media/seek_test.cpp)
 
 target_link_libraries(rf_media_tests
     PRIVATE
