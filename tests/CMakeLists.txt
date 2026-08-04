@@ -19,3 +19,26 @@ target_link_libraries(rf_core_tests
 gtest_discover_tests(rf_core_tests
     DISCOVERY_MODE PRE_TEST
     PROPERTIES LABELS "core")
+
+if(RF_BUILD_APP)
+    set(CMAKE_AUTOMOC ON)
+
+    add_executable(rf_app_tests
+        app/main.cpp
+        app/main_window_test.cpp
+        app/window_title_test.cpp)
+
+    # No gtest_main: widgets need a QApplication, which app/main.cpp owns.
+    target_link_libraries(rf_app_tests
+        PRIVATE
+            rf::app
+            rf::warnings
+            GTest::gtest)
+
+    rf_deploy_qt(rf_app_tests)
+    rf_deploy_qt_offscreen_platform(rf_app_tests)
+
+    gtest_discover_tests(rf_app_tests
+        DISCOVERY_MODE PRE_TEST
+        PROPERTIES LABELS "app")
+endif()
