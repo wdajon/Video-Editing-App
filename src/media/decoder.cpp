@@ -1,6 +1,8 @@
 #include "rf/media/decoder.hpp"
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>

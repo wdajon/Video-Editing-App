@@ -1,5 +1,8 @@
 #include "rf/media/video_frame.hpp"
 
+#include <cstddef>
+#include <cstdint>
+
 namespace rf::media {
 namespace {
 

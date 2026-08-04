@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>  // std::shuffle -- MSVC provides it transitively, libstdc++ does not
 #include <cstdint>
 #include <filesystem>
 #include <numeric>
