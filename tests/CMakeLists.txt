@@ -35,8 +35,16 @@ if(RF_BUILD_APP)
             rf::warnings
             GTest::gtest)
 
-    rf_deploy_qt(rf_app_tests)
-    rf_deploy_qt_offscreen_platform(rf_app_tests)
+    # Deliberately NOT calling rf_deploy_qt here. rf_app_tests and reelforge
+    # share one output directory, and two concurrent windeployqt runs writing
+    # the same DLLs race under a parallel build:
+    #
+    #   Cannot copy ...icuuc.dll: Existing file .../bin/icuuc.dll is not writable
+    #
+    # Deployment happens once, on reelforge. Depending on that target makes the
+    # build system order the two, so the Qt runtime is in place beside the test
+    # binary before CTest ever runs it.
+    add_dependencies(rf_app_tests reelforge)
 
     gtest_discover_tests(rf_app_tests
         DISCOVERY_MODE PRE_TEST

@@ -4,6 +4,12 @@
 # the build tree. Without this, an executable that links a shared Qt build links
 # fine and then fails to start, which is a worse failure than not building.
 #
+# Call this for AT MOST ONE target per output directory. windeployqt copies into
+# the directory containing the target, so two targets in the same directory each
+# carrying a deployment step will race under a parallel build and fail with
+# "Existing file ... is not writable". Other targets sharing the directory should
+# take a build dependency on the deployed one instead.
+#
 # On non-Windows platforms CMake's build-tree RPATH already resolves Qt, so this
 # is a no-op there.
 

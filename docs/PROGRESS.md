@@ -157,6 +157,36 @@ reading of the log. Re-running the failed job first cost one command and showed
 the theory was wrong. A deterministic-looking failure is not deterministic until
 it has failed twice.
 
+### Iteration 3a — a race in the build system, found by CI after the gate passed
+
+The gate run at `6a93924` was green. The very next commit (`891d1d9`, an Actions
+version bump) turned Windows Debug red at the **Build** step:
+
+```
+FAILED: [code=1] bin/rf_app_tests.exe
+Cannot copy C:\Windows\system32\icuuc.dll to ...\build\windows-debug\bin\icuuc.dll:
+  Cannot open for output: Existing file ...\bin\icuuc.dll is not writable
+```
+
+`rf_deploy_qt` was attached to both `reelforge` and `rf_app_tests`, which share a
+single output directory. Under `--parallel`, two `windeployqt` invocations raced
+to write the same DLLs. Deployment now happens once, on `reelforge`, and
+`rf_app_tests` takes a build dependency on it so the two are ordered.
+
+**Two things this exposes about the earlier iterations, both worth keeping:**
+
+1. **Iteration 2's checklist answer was wrong.** The question "does this increment
+   leak, race, or allocate on the render thread?" was answered "no render thread
+   exists yet". There was no render thread, but there *was* a race — in the build
+   system, shipped in the same increment. The question deserved a wider reading
+   than it got.
+2. **Local verification was invalid and looked fine.** Every local build reused a
+   `bin/` that was already populated, so `windeployqt` reported "up to date" and
+   never wrote anything, so the two invocations never contended. Only a clean
+   tree exercises the copy. The fix was re-verified after
+   `rm -rf build/windows-debug`, which is now the standard for anything touching
+   the build system.
+
 ### Gate blockers, resolved
 
 | Raised | Blocker | Resolution |
