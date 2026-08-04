@@ -49,6 +49,28 @@ cmake --build build\windows-debug --parallel
 ctest --preset windows-debug
 ```
 
+### Linux
+
+`scripts/bootstrap_linux.sh` takes a bare Debian/Ubuntu machine — including a
+fresh WSL distro — all the way to a passing test run:
+
+```bash
+./scripts/bootstrap_linux.sh
+```
+
+It installs the toolchain and Qt runtime dependencies, bootstraps vcpkg, fetches
+the pinned Qt, then configures, builds, tests, and smoke-runs both binaries. It
+performs the same steps as the Linux CI jobs, so a local failure and a CI failure
+mean the same thing.
+
+Under WSL, clone into the Linux filesystem rather than building across `/mnt`:
+compiling on a DrvFs mount is several times slower and loses the executable bit.
+
+```bash
+git clone /mnt/a/Development/Claude/'Video Editing app' ~/reelforge
+cd ~/reelforge && ./scripts/bootstrap_linux.sh
+```
+
 Available presets: `windows-debug`, `windows-release`, `windows-asan`,
 `linux-debug`, `linux-release`, `linux-asan`, `linux-tsan`.
 
