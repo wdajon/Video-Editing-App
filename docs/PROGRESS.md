@@ -1,5 +1,61 @@
 # Progress
 
+## M2 — Timeline data model + undo/redo command stack
+
+**Exit gate:** 10,000-op fuzz on the command stack; undo returns to a
+byte-identical state. **Gate status: PASSED.**
+
+```
+[fuzz] attempted=10000 applied=9060 rejected=940
+100% tests passed, 0 tests failed out of 194
+```
+
+10,000 randomly generated edits, 9,060 of which applied. All 9,060 undone in
+reverse; the document then matched its starting state on all three checks:
+serialised bytes, structural equality, and the id counter.
+
+**The 90.6% apply rate is part of the evidence, not trivia.** A fuzz that mostly
+generates rejected edits exercises validation and never touches an inverse, and
+would pass with every undo path broken. The generator therefore builds commands
+against the document's actual current contents. The counter is asserted: the test
+fails if fewer than half the attempts apply.
+
+**Why the gate is checked three ways.** Byte equality alone would keep passing if
+the serialiser omitted a field — both sides would omit it identically while undo
+silently lost it forever. Structural equality alone would miss clip ordering and
+id-counter drift, which serialise differently but compare equal member by member.
+Neither check subsumes the other.
+
+### What the design had to get right
+
+- **Ids are returned on undo.** A command that spends an id restores the counter
+  when reverted. Without it every visible object matches and the bytes still
+  differ — which is exactly the failure byte-comparison exists to catch.
+- **Redo reuses the id it originally issued.** A redo that mints a fresh id
+  produces a document that looks correct and is not the one the user undid.
+  `CreatingCommand` holds both rules so no individual command can forget one.
+- **A failed command never enters the history.** Otherwise the next undo would
+  reverse an edit that never happened.
+- **Flag commands record the previous value** rather than flipping. Setting a
+  flag to the value it already holds is a no-op whose inverse must also be a
+  no-op; a flip would turn a no-op edit into a change on undo.
+
+### Notes
+
+The one failure during this milestone was **a defect in a test, not in the
+code**: `DeepHistoryUndoesInReverseOrder` undid the whole stack while comparing
+against a snapshot taken after a track was added. The implementation had
+correctly returned the document to pristine — id counter back to 1 — and the
+expectation was simply wrong. Corrected to undo only the 50 clip additions, then
+assert the pristine state explicitly.
+
+A `SetFlagCommand` template over a pointer-to-member was written and then
+replaced with three plain classes before it ever compiled. It required explicit
+specialisations, which is precisely the corner where MSVC and Clang disagree, and
+it saved fewer lines than it risked — a lesson taken from the `<algorithm>`
+failure earlier the same day.
+
+
 ## M1 — Media engine: probe, decode, frame-accurate seek
 
 **Exit gate:** seek to any frame of a 10-minute 4K file; decoded hash matches a

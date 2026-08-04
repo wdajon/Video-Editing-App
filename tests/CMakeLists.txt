@@ -44,6 +44,8 @@ gtest_discover_tests(rf_media_tests
     PROPERTIES LABELS "media")
 
 add_executable(rf_timeline_tests
+    timeline/command_fuzz_test.cpp
+    timeline/command_test.cpp
     timeline/document_test.cpp
     timeline/serialise_test.cpp)
 
