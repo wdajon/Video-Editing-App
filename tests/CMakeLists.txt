@@ -20,6 +20,20 @@ gtest_discover_tests(rf_core_tests
     DISCOVERY_MODE PRE_TEST
     PROPERTIES LABELS "core")
 
+add_executable(rf_media_tests
+    media/rational_test.cpp)
+
+target_link_libraries(rf_media_tests
+    PRIVATE
+        rf::media
+        rf::warnings
+        GTest::gtest
+        GTest::gtest_main)
+
+gtest_discover_tests(rf_media_tests
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES LABELS "media")
+
 if(RF_BUILD_APP)
     set(CMAKE_AUTOMOC ON)
 

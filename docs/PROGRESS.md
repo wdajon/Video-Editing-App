@@ -1,5 +1,75 @@
 # Progress
 
+## M1 — Media engine: probe, decode, frame-accurate seek
+
+**Exit gate:** seek to any frame of a 10-minute 4K file; decoded hash matches a
+reference. **Gate status: NOT PASSED** — iteration 1 lays the time model the
+gate depends on; nothing decodes yet.
+
+### Iteration 1 — exact rational time arithmetic
+
+**Increment:** the timestamp representation, before any libav code. Frame
+accuracy is decided by the number type, not by the decoder: 1001/30000 is not
+representable in binary floating point, so a float pipeline accumulates error
+and lands a cut a frame off after a few thousand frames. That is the ±1 drift
+the rubric forbids, and no amount of care downstream fixes a representation that
+permits it.
+
+**Falsifiable check:** every frame of a 10-minute 29.97 fps timeline converts to
+a 1/90000 tick base and back to exactly the frame it started on — all 17,982 of
+them, not a sample.
+
+**Verified (2026-08-04, MSVC 19.44.35228, Debug):**
+
+```
+[4/17]  Building CXX object src\media\CMakeFiles\rf_media.dir\rational.cpp.obj
+[10/17] Linking CXX executable bin\rf_media_tests.exe        <- zero warnings at /W4 /WX
+
+100% tests passed, 0 tests failed out of 100
+app = 10 tests    core = 48 tests    media = 42 tests
+```
+
+**Design decisions worth recording:**
+
+- `Rational` is always gcd-normalised with a positive denominator, so equality is
+  structural: `24000/1001 == 48000/2002` without a comparison epsilon. Every
+  "is this 23.976?" check in the codebase depends on that being reliable.
+- Ordering cross-multiplies at 128-bit width. In int64 it silently gives the
+  wrong answer for large values; in floating point it gives the wrong answer for
+  near-equal ones.
+- `mul_div` and `rescale` carry a full 64x64→128 intermediate, hand-written from
+  32-bit limbs rather than `_umul128` or `unsigned __int128`. One implementation
+  to reason about and test on every target beats a platform split in the code
+  every timestamp flows through, and this runs at frame rate, not pixel rate.
+- Overflow is always an error value, never a wrap. A wrapped timestamp is a seek
+  to the wrong frame that reports success — the exact failure mode the rubric's
+  "silently swallow an error" question is asking about.
+- `approximate()` is deliberately not called `to_double`, and is not an implicit
+  conversion, so using a float inside timing logic is visible at the call site.
+
+**Environmental defect found and guarded (from the log, not from a guess):**
+
+FFmpeg's vcpkg build runs under MSYS/autotools and passes the vcpkg library
+directory to `link.exe` as an **unquoted** `-libpath`:
+
+```
+link.exe ... -libpath:A:/Development/Claude/Video Editing app/build/...
+LINK : fatal error LNK1181: cannot open input file 'Editing.obj'
+```
+
+The checkout path contains spaces, the argument splits, and `Editing` becomes a
+phantom object file. Worked around with
+`-DVCPKG_INSTALLED_DIR=<space-free path>`; FFmpeg then builds in ~7 minutes. A
+guard now runs **before** `project()` and fails in a second with both remedies
+named, rather than letting it surface minutes deep inside a vcpkg install.
+
+**Process note:** the first configure after this fix still failed, because CMake
+files were edited while a configure was in flight and it read a mixed state. Not
+a code defect, but a repeat-able way to waste a cycle: leave the tree alone while
+a configure runs.
+
+
+
 ## M0 — Repo, CMake, dep manifest, CI, empty Qt shell
 
 **Exit gate:** clean clone → build → run on 2 OSes; CI green.

@@ -1,5 +1,25 @@
 cmake_minimum_required(VERSION 3.24)
 
+# FFmpeg is built by vcpkg through MSYS/autotools, and its configure step passes
+# the vcpkg library directory to link.exe as an unquoted -libpath. A space in
+# that path splits the argument, and the link fails with an error that names a
+# fragment of your own directory as a missing object file:
+#
+#   -libpath:A:/Development/Claude/Video Editing app/build/...
+#   LINK : fatal error LNK1181: cannot open input file 'Editing.obj'
+#
+# Caught before project() because the failure otherwise happens inside vcpkg's
+# install during project(), several minutes in and with the cause well buried.
+if(NOT DEFINED VCPKG_INSTALLED_DIR AND CMAKE_BINARY_DIR MATCHES " ")
+    message(FATAL_ERROR
+        "The build directory contains a space:\n"
+        "  ${CMAKE_BINARY_DIR}\n"
+        "FFmpeg cannot be built from a path containing spaces. Either:\n"
+        "  - move the checkout to a path with no spaces (preferred), or\n"
+        "  - configure with -DVCPKG_INSTALLED_DIR=<space-free path>, e.g.\n"
+        "      cmake --preset windows-debug -DVCPKG_INSTALLED_DIR=C:/rf-deps/windows-debug")
+endif()
+
 project(ReelForge
     VERSION 0.1.0
     DESCRIPTION "Non-linear video editor for short-form vertical delivery"
@@ -60,6 +80,7 @@ if(RF_BUILD_APP)
 endif()
 
 add_subdirectory(src/core)
+add_subdirectory(src/media)
 add_subdirectory(tools/rf_version)
 
 if(RF_BUILD_APP)

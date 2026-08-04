@@ -7,12 +7,26 @@
   "license": "GPL-3.0-or-later",
   "builtin-baseline": "f1d4bbc72f183441403ba5107cb19d75a5abc2a2",
   "dependencies": [
-    "gtest"
+    "gtest",
+    {
+      "name": "ffmpeg",
+      "default-features": false,
+      "features": [
+        "avcodec",
+        "avformat",
+        "swresample",
+        "swscale"
+      ]
+    }
   ],
   "overrides": [
     {
       "name": "gtest",
       "version-semver": "1.17.0#3"
+    },
+    {
+      "name": "ffmpeg",
+      "version": "8.1.2#3"
     }
   ]
 }

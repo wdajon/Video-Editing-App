@@ -74,6 +74,18 @@ cd ~/reelforge && ./scripts/bootstrap_linux.sh
 Available presets: `windows-debug`, `windows-release`, `windows-asan`,
 `linux-debug`, `linux-release`, `linux-asan`, `linux-tsan`.
 
+### If your checkout path contains a space
+
+FFmpeg is built by vcpkg through MSYS/autotools, and its configure step hands the
+vcpkg library directory to the linker unquoted. A space splits the argument and
+the link fails naming a fragment of your own path as a missing object file.
+Configure warns about this before it happens. Either move the checkout to a path
+without spaces, or redirect vcpkg's install tree:
+
+```bash
+cmake --preset windows-debug -DVCPKG_INSTALLED_DIR=C:/rf-deps/windows-debug
+```
+
 ## Layout
 
 | Path | Contents |
