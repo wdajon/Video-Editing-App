@@ -1,0 +1,16 @@
+# Normalise to LF in the repository. Windows checkouts get CRLF for text files
+# where the platform expects it; everything the build reads stays LF so the
+# Linux jobs and golden-frame fixtures are byte-identical across platforms.
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary fixtures must never be line-ending mangled.
+*.png binary
+*.exr binary
+*.mp4 binary
+*.mov binary
+*.wav binary
+*.icc binary
