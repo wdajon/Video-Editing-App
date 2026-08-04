@@ -12,6 +12,9 @@ concurrency:
 
 env:
   VCPKG_DISABLE_METRICS: "1"
+  # Pinned by docs/adr/003-qt-acquisition.md. Keep in step with
+  # scripts/install_qt.ps1 -- the two are the same pin in two places.
+  RF_QT_VERSION: "6.10.3"
 
 jobs:
   build:
@@ -48,6 +51,23 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build clang lld
+          # Qt 6 Widgets links these even when only the offscreen platform is used.
+          sudo apt-get install -y libgl1-mesa-dev libxkbcommon-dev libvulkan-dev
+
+      # Official Qt binaries, fetched without a Qt account. See ADR 003 for why
+      # Qt is not in the vcpkg manifest.
+      - name: Install Qt ${{ env.RF_QT_VERSION }}
+        shell: bash
+        run: |
+          python3 -m pip install --upgrade aqtinstall
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            host=windows; arch=win64_msvc2022_64; subdir=msvc2022_64
+          else
+            host=linux;   arch=linux_gcc_64;      subdir=gcc_64
+          fi
+          python3 -m aqt install-qt "$host" desktop "$RF_QT_VERSION" "$arch" \
+            -m qtshadertools qtimageformats -O "$GITHUB_WORKSPACE/Qt"
+          echo "QT_ROOT=$GITHUB_WORKSPACE/Qt/$RF_QT_VERSION/$subdir" >> "$GITHUB_ENV"
 
       - name: Read vcpkg baseline from manifest
         id: vcpkg_baseline
@@ -97,8 +117,24 @@ jobs:
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
 
-      # Proves the produced binary actually runs on the target OS, which a
-      # successful link does not.
-      - name: Smoke run
+      # Proves the produced binaries actually run on the target OS, which a
+      # successful link does not. The GUI shell is started under the offscreen
+      # platform so it exercises real widget creation with no display server.
+      - name: Smoke run (headless tool)
         run: ./build/${{ matrix.preset }}/bin/rf_version
         shell: bash
+
+      - name: Smoke run (application shell)
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          ./build/${{ matrix.preset }}/bin/reelforge &
+          pid=$!
+          sleep 5
+          if ! kill -0 "$pid" 2>/dev/null; then
+            echo "reelforge exited before the timeout"
+            wait "$pid"
+            exit 1
+          fi
+          kill "$pid"

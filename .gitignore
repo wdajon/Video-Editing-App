@@ -20,3 +20,6 @@ Thumbs.db
 # Test and render scratch output
 tests/output/
 *.rfproj.bak
+
+# aqtinstall drops a log next to the working directory
+aqtinstall.log

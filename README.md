@@ -13,6 +13,17 @@ Requirements:
 - A C++20 compiler (MSVC 19.4x, Clang 16+, or GCC 13+)
 - CMake ≥ 3.24 and Ninja
 - A bootstrapped [vcpkg](https://github.com/microsoft/vcpkg) checkout
+- Qt 6.10.3 (see [ADR 003](docs/adr/003-qt-acquisition.md) for why it is pinned
+  and why it is not in the vcpkg manifest)
+
+Install Qt with `scripts/install_qt.ps1`, then point `QT_ROOT` at it:
+
+```powershell
+.\scripts\install_qt.ps1 -Prefix A:\Qt
+$env:QT_ROOT = 'A:\Qt\6.10.3\msvc2022_64'
+```
+
+Configure with `-DRF_BUILD_APP=OFF` to build the headless targets without Qt.
 
 ```bash
 git clone https://github.com/microsoft/vcpkg.git
