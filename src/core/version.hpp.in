@@ -1,0 +1,38 @@
+// Generated from src/core/version.hpp.in by CMake -- do not edit the generated copy.
+
+#ifndef RF_CORE_VERSION_HPP
+#define RF_CORE_VERSION_HPP
+
+#include <string_view>
+
+namespace rf {
+
+inline constexpr int kVersionMajor = @PROJECT_VERSION_MAJOR@;
+inline constexpr int kVersionMinor = @PROJECT_VERSION_MINOR@;
+inline constexpr int kVersionPatch = @PROJECT_VERSION_PATCH@;
+
+/// Dotted release version, e.g. "0.1.0".
+inline constexpr std::string_view kVersionString = "@PROJECT_VERSION@";
+
+/// Short git revision the binary was built from, with "+dirty" appended when
+/// the tree had uncommitted tracked changes. "unknown" if git was unavailable.
+inline constexpr std::string_view kGitRevision = "@RF_GIT_REVISION@@RF_GIT_DIRTY@";
+
+/// Everything a bug report needs to identify a build.
+struct BuildInfo {
+    std::string_view version;
+    std::string_view git_revision;
+    std::string_view build_type;
+    std::string_view compiler;
+    std::string_view target_system;
+};
+
+[[nodiscard]] BuildInfo build_info() noexcept;
+
+/// True when this binary was built from a clean, identifiable commit -- the
+/// precondition for a render being reproducible from the project file alone.
+[[nodiscard]] bool build_is_reproducible() noexcept;
+
+}  // namespace rf
+
+#endif  // RF_CORE_VERSION_HPP

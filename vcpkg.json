@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "reelforge",
+  "version-semver": "0.1.0",
+  "description": "Non-linear video editor for short-form vertical delivery",
+  "homepage": "https://github.com/reelforge/reelforge",
+  "license": "GPL-3.0-or-later",
+  "builtin-baseline": "f1d4bbc72f183441403ba5107cb19d75a5abc2a2",
+  "dependencies": [
+    "gtest"
+  ],
+  "overrides": [
+    {
+      "name": "gtest",
+      "version-semver": "1.17.0#3"
+    }
+  ]
+}

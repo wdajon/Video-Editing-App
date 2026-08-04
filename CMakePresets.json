@@ -1,0 +1,117 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "RF_BUILD_TESTS": "ON",
+        "RF_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows x64 Debug (MSVC)",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static-md"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows x64 RelWithDebInfo (MSVC)",
+      "inherits": "windows-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "windows-asan",
+      "displayName": "Windows x64 AddressSanitizer (MSVC)",
+      "inherits": "windows-debug",
+      "cacheVariables": {
+        "RF_ENABLE_ASAN": "ON"
+      }
+    },
+    {
+      "name": "linux-debug",
+      "displayName": "Linux x64 Debug (Clang)",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "VCPKG_TARGET_TRIPLET": "x64-linux"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux x64 RelWithDebInfo (Clang)",
+      "inherits": "linux-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "linux-asan",
+      "displayName": "Linux x64 ASan+UBSan (Clang)",
+      "inherits": "linux-debug",
+      "cacheVariables": {
+        "RF_ENABLE_ASAN": "ON",
+        "RF_ENABLE_UBSAN": "ON"
+      }
+    },
+    {
+      "name": "linux-tsan",
+      "displayName": "Linux x64 ThreadSanitizer (Clang)",
+      "inherits": "linux-debug",
+      "cacheVariables": {
+        "RF_ENABLE_TSAN": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "windows-debug", "configurePreset": "windows-debug" },
+    { "name": "windows-release", "configurePreset": "windows-release" },
+    { "name": "windows-asan", "configurePreset": "windows-asan" },
+    { "name": "linux-debug", "configurePreset": "linux-debug" },
+    { "name": "linux-release", "configurePreset": "linux-release" },
+    { "name": "linux-asan", "configurePreset": "linux-asan" },
+    { "name": "linux-tsan", "configurePreset": "linux-tsan" }
+  ],
+  "testPresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "stopOnFailure": false }
+    },
+    { "name": "windows-debug", "inherits": "base", "configurePreset": "windows-debug" },
+    { "name": "windows-release", "inherits": "base", "configurePreset": "windows-release" },
+    { "name": "windows-asan", "inherits": "base", "configurePreset": "windows-asan" },
+    { "name": "linux-debug", "inherits": "base", "configurePreset": "linux-debug" },
+    { "name": "linux-release", "inherits": "base", "configurePreset": "linux-release" },
+    { "name": "linux-asan", "inherits": "base", "configurePreset": "linux-asan" },
+    { "name": "linux-tsan", "inherits": "base", "configurePreset": "linux-tsan" }
+  ]
+}

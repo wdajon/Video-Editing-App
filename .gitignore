@@ -1,0 +1,22 @@
+# Build output
+build/
+out/
+install/
+cmake-build-*/
+
+# vcpkg per-project artifacts (the manifest itself is tracked)
+vcpkg_installed/
+
+# Editor / IDE
+.vs/
+.vscode/
+.idea/
+*.user
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Test and render scratch output
+tests/output/
+*.rfproj.bak
