@@ -17,6 +17,11 @@ if(RF_ENABLE_ASAN)
 endif()
 if(RF_ENABLE_TSAN)
     list(APPEND _rf_san_list thread)
+    # Lets code detect a TSan build. Needed where ReelForge calls into a
+    # third-party library that is NOT sanitizer-instrumented: TSan cannot see
+    # such a library's synchronisation and reports it as racing. See the
+    # threading comment in src/media/decoder.cpp.
+    target_compile_definitions(rf_sanitizers INTERFACE RF_THREAD_SANITIZER=1)
 endif()
 if(RF_ENABLE_UBSAN)
     if(MSVC)

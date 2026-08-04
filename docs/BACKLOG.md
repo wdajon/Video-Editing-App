@@ -20,6 +20,8 @@ creep gets refused without losing the idea.
 
 | D9 | M1 i4 | **Random seek into long-GOP 4K misses the 150 ms budget.** Measured on the reference machine at p99 **355 ms** (mean 194 ms) against a 10-minute 3840x2160 GOP-250 source — see the baseline table in `docs/PROGRESS.md`. Accuracy is unaffected and passes. Two fixes already landed (decoder threading, and not copying frames a seek discards) took it from 2534 ms to 355 ms; the remaining gap is not reachable by tuning this loop, because an average seek must decode ~125 frames of 4K on the CPU. Fix: hardware decode (D3D11VA / NVDEC / VideoToolbox) and proxy media. **M3 must not be declared complete while this is unmet** — M3's own gate measures sustained playback, which can pass with slow seeks, so this needs checking explicitly. | M3 |
 
+| D10 | M2 i1 | **TSan does not cover libav's internal threading.** vcpkg builds FFmpeg without sanitizer instrumentation, so ThreadSanitizer cannot observe libav's own happens-before edges and reports its frame threading as data races — every frame landing in `pthread_frame.c`, `frame.c` or `h2645_parse.c`. Decoder threading is therefore forced to one thread under TSan (`RF_THREAD_SANITIZER`), which means **the TSan job validates ReelForge's concurrency but not the multi-threaded decode path that ships**. Suppressions were rejected: they would also hide real races surfacing through a libav call. Fix: build FFmpeg with `-fsanitize=thread` via a custom vcpkg triplet for the TSan job only. | M3 (job system — the first ReelForge code that is genuinely concurrent) |
+
 ## Deferred work
 
 - **vcpkg binary caching in CI** (ADR 001). Clean builds will get slow once

@@ -338,8 +338,22 @@ Result<VideoDecoder> VideoDecoder::open(const std::filesystem::path& path) {
     // machine idle and makes 4K seeking an order of magnitude slower than the
     // hardware allows. thread_count 0 asks libav to pick based on the CPU;
     // decoders that cannot honour a threading mode silently ignore it.
+    //
+    // Under ThreadSanitizer it is forced back to one thread. FFmpeg is linked
+    // from vcpkg without sanitizer instrumentation, so TSan cannot observe the
+    // happens-before edges inside libav's own frame threading and reports it as
+    // racing -- every frame of those reports lands in pthread_frame.c, frame.c
+    // or h2645_parse.c, none in ReelForge. Silencing them with suppressions
+    // would also silence real races that surface through a libav call, so the
+    // threading is disabled instead and the limitation written down: the TSan
+    // job validates ReelForge's own concurrency, not libav's. Building FFmpeg
+    // with TSan through a custom vcpkg triplet is the real fix (D10).
+#if defined(RF_THREAD_SANITIZER)
+    impl->codec->thread_count = 1;
+#else
     impl->codec->thread_count = 0;
     impl->codec->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+#endif
 
     const int codec_open_result = avcodec_open2(impl->codec.get(), codec, nullptr);
     if (codec_open_result < 0) {

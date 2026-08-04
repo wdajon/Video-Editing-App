@@ -43,6 +43,21 @@ gtest_discover_tests(rf_media_tests
     DISCOVERY_MODE PRE_TEST
     PROPERTIES LABELS "media")
 
+add_executable(rf_timeline_tests
+    timeline/document_test.cpp
+    timeline/serialise_test.cpp)
+
+target_link_libraries(rf_timeline_tests
+    PRIVATE
+        rf::timeline
+        rf::warnings
+        GTest::gtest
+        GTest::gtest_main)
+
+gtest_discover_tests(rf_timeline_tests
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES LABELS "timeline")
+
 if(RF_BUILD_APP)
     set(CMAKE_AUTOMOC ON)
 
