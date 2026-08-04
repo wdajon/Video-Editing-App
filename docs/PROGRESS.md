@@ -6,6 +6,56 @@
 reference. **Gate status: NOT PASSED** — iteration 1 lays the time model the
 gate depends on; nothing decodes yet.
 
+### Iteration 2 — probe
+
+**Increment:** open a container, describe its streams, close it. No decoding, no
+seeking. The first code in the project that links libav.
+
+**Falsifiable check:** probing three real files reports exactly what `ffprobe`
+reports for them, field by field, including a 30000/1001 frame rate surviving as
+an exact ratio; and every malformed-input path returns a usable error instead of
+crashing or returning a plausible-looking empty result.
+
+**Verified (2026-08-04, MSVC 19.44.35228, FFmpeg 8.1.2, Debug):**
+
+```
+[11/21] Building CXX object src\media\CMakeFiles\rf_media.dir\probe.cpp.obj
+[16/21] Linking CXX executable bin\rf_media_tests.exe     <- zero warnings at /W4 /WX
+
+100% tests passed, 0 tests failed out of 113
+app = 10 tests    core = 48 tests    media = 55 tests
+```
+
+**Design decisions worth recording:**
+
+- **Unknown is `std::optional`, never a sentinel or a default.** Audio streams
+  really do report `0/0` for frame rate; some containers leave aspect ratio at
+  `0/1`. Those arrive as `nullopt`, so nothing downstream can consume an invented
+  25 or 30 fps as though the file had stated it. A test asserts this specifically.
+- **A zero time base is left at zero** rather than defaulted to something
+  plausible, so a caller can detect an unusable stream with `is_zero()` instead
+  of silently computing wrong timestamps from a fabricated base.
+- **`container_frame_count` is documented as untrusted.** Containers lie; the
+  honest count comes from decoding. It is kept for diagnostics and cross-checks,
+  and named so nobody seeks with it.
+- **FFmpeg include directories are `PRIVATE`**, so the ADR 004 layering rule --
+  nothing above `rf_media` includes a libav header -- is enforced by the build
+  rather than by review.
+- **libav errors keep both the text and the numeric code.** `av_strerror` alone
+  frequently yields "Invalid argument", which is not actionable in a bug report.
+
+**Fixture provenance is recorded and its limit stated.** `tests/fixtures/media/`
+carries small committed files with the exact `ffmpeg` command that produced each
+one, plus the `ffprobe` output the test expectations are drawn from. They are
+committed rather than generated at test time because a test that needs an
+`ffmpeg` binary on the machine fails for reasons unrelated to ReelForge.
+
+These fixtures are **adequate for probe and demux tests and explicitly not
+adequate for the M1 exit gate**: they were produced by the FFmpeg command-line
+tool, and a decoder cannot be its own oracle. The gate needs real footage or a
+reference hash from an independent decoder. Until it has one, the gate is not
+met and will not be claimed as met.
+
 ### Iteration 1 — exact rational time arithmetic
 
 **Increment:** the timestamp representation, before any libav code. Frame

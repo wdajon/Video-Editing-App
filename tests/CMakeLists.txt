@@ -21,6 +21,7 @@ gtest_discover_tests(rf_core_tests
     PROPERTIES LABELS "core")
 
 add_executable(rf_media_tests
+    media/probe_test.cpp
     media/rational_test.cpp)
 
 target_link_libraries(rf_media_tests
@@ -29,6 +30,12 @@ target_link_libraries(rf_media_tests
         rf::warnings
         GTest::gtest
         GTest::gtest_main)
+
+# Fixtures are read from the source tree rather than copied into the build tree:
+# they are inputs, they are never written, and a stale copy in a build directory
+# is a debugging session nobody needs.
+target_compile_definitions(rf_media_tests
+    PRIVATE RF_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures")
 
 gtest_discover_tests(rf_media_tests
     DISCOVERY_MODE PRE_TEST
