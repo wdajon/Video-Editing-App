@@ -36,6 +36,7 @@ log "Installing build tools and Qt runtime dependencies"
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
     build-essential clang lld ninja-build cmake git curl zip unzip tar pkg-config \
+    nasm \
     ca-certificates python3 python3-venv python3-pip \
     libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-0 libvulkan-dev \
     libfontconfig1 libfreetype6 libx11-xcb1 libxcb-cursor0 libxcb-icccm4 \

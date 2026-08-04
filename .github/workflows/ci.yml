@@ -51,6 +51,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build clang lld
+          # FFmpeg assembles its x86 SIMD with nasm and probes dependencies with
+          # pkg-config; vcpkg does not vendor either on Linux and fails the port
+          # build outright if they are missing.
+          sudo apt-get install -y nasm pkg-config
           # Qt 6 Widgets links these even when only the offscreen platform is used.
           sudo apt-get install -y libgl1-mesa-dev libxkbcommon-dev libvulkan-dev
 
