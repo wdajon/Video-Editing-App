@@ -22,6 +22,59 @@ number comes from the reference machine and is recorded with its hardware, the
 same arrangement as the M1 seek baseline. This is written down because it is
 exactly the kind of distinction that erodes quietly.
 
+### Iteration 5 — measured sustained composite, and why it fails
+
+**Gate shape measured on the reference machine (RTX 3070, RelWithDebInfo):**
+
+```
+scene:   1080x1920, 3 layers, 30 fps for 60 s
+produced 1800 frames in 88.5 s
+dropped:  856
+interval ms  p50 49.90  p99 53.53  max 58.31  (budget 33.33)
+no dropped frames: FAIL
+p99 <= 40 ms:      FAIL
+```
+
+**The first hypothesis was wrong.** Per-frame allocation looked like the obvious
+culprit -- `composite()` was creating two images, memory, views, a descriptor
+pool, a command buffer and a fence every frame, which is precisely what the
+"zero allocations on the render thread" budget forbids. Caching them moved p50
+from 54.23 ms to 49.90 ms. Real, worth keeping, and about 4 ms of a 54 ms
+problem.
+
+**What actually dominates, from a scaling experiment rather than a guess:**
+
+| Scene | p50 |
+|---|---|
+| 1080x1920, 3 layers | 48.75 ms |
+| 540x960, 3 layers (quarter the pixels) | 8.75 ms |
+| 270x480, 3 layers (one sixteenth) | 1.73 ms |
+| 1080x1920, **1** layer | 38.53 ms |
+
+Cost tracks pixel count, not dispatch count. Going from three layers to one
+saves only 10 ms, so each layer costs about 5 ms -- its 8.3 MB upload -- leaving
+a **fixed cost near 33 ms** that is the 8.3 MB readback plus the full stall on
+the fence. The blending itself is a small fraction of the frame.
+
+**Conclusion: the API shape cannot meet the budget, and tuning inside it will
+not fix that.** `composite()` takes CPU pixels and returns CPU pixels,
+synchronously. That is about 33 MB across PCIe per frame with no overlap, and it
+is the right shape for tests and for export, where correctness matters and
+latency does not. It is the wrong shape for playback.
+
+The playback path needs three things this API cannot express (tracked as D13):
+
+1. **Frames resident on the GPU.** A decoded frame should be uploaded once, not
+   re-uploaded every time it is composited. Static layers should never re-upload.
+2. **No readback.** Playback presents from the GPU image; pulling 8.3 MB back to
+   the CPU only to hand it to a window is the single largest cost measured here.
+3. **Frames in flight.** Stalling on a fence every frame serialises CPU and GPU
+   completely.
+
+The compositor is correct -- 265 tests, exact where the arithmetic is exact -- and
+it is kept as the export and golden-frame path. Playback needs a different entry
+point into the same pipeline, not a different compositor.
+
 ### Iteration 3 — headless compute render, verified pixel-exact
 
 The whole compute path end to end: logical device, memory type selection,

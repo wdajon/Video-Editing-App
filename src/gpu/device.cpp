@@ -144,7 +144,11 @@ Result<Device> Device::create(const Instance& instance, std::size_t device_index
 
     VkCommandPoolCreateInfo pool_create{};
     pool_create.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    pool_create.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    // RESET_COMMAND_BUFFER lets the compositor re-record one buffer per frame
+    // rather than allocating a new one, which is part of keeping the render
+    // loop free of per-frame allocation.
+    pool_create.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT |
+                        VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     pool_create.queueFamilyIndex = info.compute_queue_family;
     result = vkCreateCommandPool(impl->device, &pool_create, nullptr, &impl->command_pool);
     if (result != VK_SUCCESS) {

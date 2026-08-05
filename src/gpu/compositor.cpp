@@ -24,9 +24,16 @@ struct CompositePush {
 
 constexpr std::uint32_t kGroupSize = 8;
 
-/// Per-composite resources, destroyed in reverse order whatever path leaves the
-/// function. The pipeline itself is not here -- it belongs to the Compositor and
-/// is built once.
+/// Frame resources, created once per output size and then reused.
+///
+/// These used to be built and torn down inside every composite() call, which
+/// measured 54 ms per frame at 1080x1920 on an RTX 3070 -- a card that does the
+/// actual blending in about a millisecond. Allocating images, memory, views,
+/// descriptor pools, command buffers and fences per frame is exactly what the
+/// "zero allocations on the render thread" budget exists to forbid, and the
+/// measurement is what made it obvious.
+///
+/// Destroyed in reverse creation order.
 struct FrameResources {
     VkDevice device = VK_NULL_HANDLE;
     VkCommandPool owning_pool = VK_NULL_HANDLE;
@@ -42,38 +49,49 @@ struct FrameResources {
     VkBuffer readback = VK_NULL_HANDLE;
     VkDeviceMemory readback_memory = VK_NULL_HANDLE;
     VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+    VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
     VkFence fence = VK_NULL_HANDLE;
     VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+
+    /// Kept mapped for the compositor's lifetime. Coherent host memory does not
+    /// need flushing, and mapping is not free -- doing it per frame was part of
+    /// the per-frame cost.
+    void* upload_mapping = nullptr;
 
     FrameResources() = default;
     FrameResources(const FrameResources&) = delete;
     FrameResources& operator=(const FrameResources&) = delete;
 
-    ~FrameResources() {
+    ~FrameResources() { destroy(); }
+
+    void destroy() {
         if (device == VK_NULL_HANDLE) {
             return;
         }
+        if (upload_mapping != nullptr && upload_memory != VK_NULL_HANDLE) {
+            vkUnmapMemory(device, upload_memory);
+            upload_mapping = nullptr;
+        }
         if (command_buffer != VK_NULL_HANDLE && owning_pool != VK_NULL_HANDLE) {
             vkFreeCommandBuffers(device, owning_pool, 1, &command_buffer);
+            command_buffer = VK_NULL_HANDLE;
         }
-        if (fence != VK_NULL_HANDLE) { vkDestroyFence(device, fence, nullptr); }
+        if (fence != VK_NULL_HANDLE) { vkDestroyFence(device, fence, nullptr); fence = VK_NULL_HANDLE; }
         if (descriptor_pool != VK_NULL_HANDLE) {
             vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
+            descriptor_pool = VK_NULL_HANDLE;
+            descriptor_set = VK_NULL_HANDLE;
         }
-        if (readback != VK_NULL_HANDLE) { vkDestroyBuffer(device, readback, nullptr); }
-        if (readback_memory != VK_NULL_HANDLE) { vkFreeMemory(device, readback_memory, nullptr); }
-        if (upload != VK_NULL_HANDLE) { vkDestroyBuffer(device, upload, nullptr); }
-        if (upload_memory != VK_NULL_HANDLE) { vkFreeMemory(device, upload_memory, nullptr); }
-        if (source_view != VK_NULL_HANDLE) { vkDestroyImageView(device, source_view, nullptr); }
-        if (source != VK_NULL_HANDLE) { vkDestroyImage(device, source, nullptr); }
-        if (source_memory != VK_NULL_HANDLE) { vkFreeMemory(device, source_memory, nullptr); }
-        if (destination_view != VK_NULL_HANDLE) {
-            vkDestroyImageView(device, destination_view, nullptr);
-        }
-        if (destination != VK_NULL_HANDLE) { vkDestroyImage(device, destination, nullptr); }
-        if (destination_memory != VK_NULL_HANDLE) {
-            vkFreeMemory(device, destination_memory, nullptr);
-        }
+        if (readback != VK_NULL_HANDLE) { vkDestroyBuffer(device, readback, nullptr); readback = VK_NULL_HANDLE; }
+        if (readback_memory != VK_NULL_HANDLE) { vkFreeMemory(device, readback_memory, nullptr); readback_memory = VK_NULL_HANDLE; }
+        if (upload != VK_NULL_HANDLE) { vkDestroyBuffer(device, upload, nullptr); upload = VK_NULL_HANDLE; }
+        if (upload_memory != VK_NULL_HANDLE) { vkFreeMemory(device, upload_memory, nullptr); upload_memory = VK_NULL_HANDLE; }
+        if (source_view != VK_NULL_HANDLE) { vkDestroyImageView(device, source_view, nullptr); source_view = VK_NULL_HANDLE; }
+        if (source != VK_NULL_HANDLE) { vkDestroyImage(device, source, nullptr); source = VK_NULL_HANDLE; }
+        if (source_memory != VK_NULL_HANDLE) { vkFreeMemory(device, source_memory, nullptr); source_memory = VK_NULL_HANDLE; }
+        if (destination_view != VK_NULL_HANDLE) { vkDestroyImageView(device, destination_view, nullptr); destination_view = VK_NULL_HANDLE; }
+        if (destination != VK_NULL_HANDLE) { vkDestroyImage(device, destination, nullptr); destination = VK_NULL_HANDLE; }
+        if (destination_memory != VK_NULL_HANDLE) { vkFreeMemory(device, destination_memory, nullptr); destination_memory = VK_NULL_HANDLE; }
     }
 };
 
@@ -207,6 +225,13 @@ public:
     VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
     VkPipeline pipeline = VK_NULL_HANDLE;
 
+    /// Reused across frames; rebuilt only when the output size changes or more
+    /// layers arrive than the upload buffer was sized for.
+    FrameResources frame;
+    int cached_width = 0;
+    int cached_height = 0;
+    std::size_t cached_layers = 0;
+
     Impl() = default;
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
@@ -217,6 +242,7 @@ public:
         }
         VkDevice handle = device->device;
         vkDeviceWaitIdle(handle);
+        frame.destroy();
         if (pipeline != VK_NULL_HANDLE) { vkDestroyPipeline(handle, pipeline, nullptr); }
         if (pipeline_layout != VK_NULL_HANDLE) {
             vkDestroyPipelineLayout(handle, pipeline_layout, nullptr);
@@ -225,6 +251,133 @@ public:
         if (set_layout != VK_NULL_HANDLE) {
             vkDestroyDescriptorSetLayout(handle, set_layout, nullptr);
         }
+    }
+
+    /// Builds the frame resources if the requested shape differs from what is
+    /// cached. A no-op on every frame after the first at a given size, which is
+    /// the whole point.
+    [[nodiscard]] Result<void> ensure(int width, int height, std::size_t layer_count) {
+        if (cached_width == width && cached_height == height && layer_count <= cached_layers &&
+            frame.destination != VK_NULL_HANDLE) {
+            return ok();
+        }
+
+        VkDevice handle = device->device;
+        VkPhysicalDevice physical = device->physical;
+
+        // Anything in flight must finish before its resources are freed.
+        vkDeviceWaitIdle(handle);
+        frame.destroy();
+
+        frame.device = handle;
+        frame.owning_pool = device->command_pool;
+
+        const auto image_width = static_cast<std::uint32_t>(width);
+        const auto image_height = static_cast<std::uint32_t>(height);
+        const VkDeviceSize frame_bytes =
+            static_cast<VkDeviceSize>(width) * static_cast<VkDeviceSize>(height) * 4u;
+        const std::size_t capacity = std::max<std::size_t>(layer_count, 1);
+
+        if (Result<void> made = create_storage_image(
+                handle, physical, image_width, image_height,
+                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                    VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                frame.destination, frame.destination_memory, frame.destination_view);
+            !made) {
+            return made.error().with_context("destination");
+        }
+        if (Result<void> made = create_storage_image(
+                handle, physical, image_width, image_height,
+                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, frame.source,
+                frame.source_memory, frame.source_view);
+            !made) {
+            return made.error().with_context("source");
+        }
+        if (Result<void> made = create_host_buffer(
+                handle, physical, frame_bytes * static_cast<VkDeviceSize>(capacity),
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT, frame.upload, frame.upload_memory);
+            !made) {
+            return made.error().with_context("upload buffer");
+        }
+        if (Result<void> made = create_host_buffer(handle, physical, frame_bytes,
+                                                   VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                   frame.readback, frame.readback_memory);
+            !made) {
+            return made.error().with_context("readback buffer");
+        }
+
+        VkResult result = vkMapMemory(handle, frame.upload_memory, 0, VK_WHOLE_SIZE, 0,
+                                      &frame.upload_mapping);
+        if (result != VK_SUCCESS) {
+            return detail::from_vulkan(result, "cannot map the upload buffer");
+        }
+
+        VkDescriptorPoolSize pool_size{};
+        pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        pool_size.descriptorCount = 2;
+
+        VkDescriptorPoolCreateInfo pool_create{};
+        pool_create.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pool_create.maxSets = 1;
+        pool_create.poolSizeCount = 1;
+        pool_create.pPoolSizes = &pool_size;
+        result = vkCreateDescriptorPool(handle, &pool_create, nullptr, &frame.descriptor_pool);
+        if (result != VK_SUCCESS) {
+            return detail::from_vulkan(result, "cannot create the composite descriptor pool");
+        }
+
+        VkDescriptorSetAllocateInfo set_allocate{};
+        set_allocate.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        set_allocate.descriptorPool = frame.descriptor_pool;
+        set_allocate.descriptorSetCount = 1;
+        set_allocate.pSetLayouts = &set_layout;
+        result = vkAllocateDescriptorSets(handle, &set_allocate, &frame.descriptor_set);
+        if (result != VK_SUCCESS) {
+            return detail::from_vulkan(result, "cannot allocate the composite descriptor set");
+        }
+
+        // The two images never change, only their contents, so the descriptor
+        // set is written once per size rather than once per frame.
+        VkDescriptorImageInfo destination_info{};
+        destination_info.imageView = frame.destination_view;
+        destination_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        VkDescriptorImageInfo source_info{};
+        source_info.imageView = frame.source_view;
+        source_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+        VkWriteDescriptorSet writes[2]{};
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = frame.descriptor_set;
+        writes[0].dstBinding = 0;
+        writes[0].descriptorCount = 1;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[0].pImageInfo = &destination_info;
+        writes[1] = writes[0];
+        writes[1].dstBinding = 1;
+        writes[1].pImageInfo = &source_info;
+        vkUpdateDescriptorSets(handle, 2, writes, 0, nullptr);
+
+        VkCommandBufferAllocateInfo command_allocate{};
+        command_allocate.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        command_allocate.commandPool = device->command_pool;
+        command_allocate.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        command_allocate.commandBufferCount = 1;
+        result = vkAllocateCommandBuffers(handle, &command_allocate, &frame.command_buffer);
+        if (result != VK_SUCCESS) {
+            return detail::from_vulkan(result, "cannot allocate a command buffer");
+        }
+
+        VkFenceCreateInfo fence_create{};
+        fence_create.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        result = vkCreateFence(handle, &fence_create, nullptr, &frame.fence);
+        if (result != VK_SUCCESS) {
+            return detail::from_vulkan(result, "cannot create a fence");
+        }
+
+        cached_width = width;
+        cached_height = height;
+        cached_layers = capacity;
+        return ok();
     }
 };
 
@@ -320,120 +473,27 @@ Result<ImageRgba8> Compositor::composite(const std::vector<Layer>& layers, int w
         drawn.push_back(&layer);
     }
 
+    if (Result<void> ready = impl_->ensure(width, height, drawn.size()); !ready) {
+        return ready.error();
+    }
+
     const auto image_width = static_cast<std::uint32_t>(width);
     const auto image_height = static_cast<std::uint32_t>(height);
     const VkDeviceSize frame_bytes =
         static_cast<VkDeviceSize>(width) * static_cast<VkDeviceSize>(height) * 4u;
 
     VkDevice handle = impl_->device->device;
-    VkPhysicalDevice physical = impl_->device->physical;
+    FrameResources& frame = impl_->frame;
 
-    FrameResources frame;
-    frame.device = handle;
-    frame.owning_pool = impl_->device->command_pool;
-
-    if (Result<void> made = create_storage_image(
-            handle, physical, image_width, image_height,
-            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-            frame.destination, frame.destination_memory, frame.destination_view);
-        !made) {
-        return made.error().with_context("destination");
-    }
-    if (Result<void> made = create_storage_image(
-            handle, physical, image_width, image_height,
-            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, frame.source,
-            frame.source_memory, frame.source_view);
-        !made) {
-        return made.error().with_context("source");
+    auto* upload_bytes = static_cast<std::uint8_t*>(frame.upload_mapping);
+    for (std::size_t i = 0; i < drawn.size(); ++i) {
+        std::memcpy(upload_bytes + i * static_cast<std::size_t>(frame_bytes),
+                    drawn[i]->source.pixels.data(), static_cast<std::size_t>(frame_bytes));
     }
 
-    // One upload buffer holding every layer back to back, so the whole composite
-    // is a single submission rather than one per layer.
-    const VkDeviceSize upload_bytes =
-        frame_bytes * static_cast<VkDeviceSize>(std::max<std::size_t>(drawn.size(), 1));
-    if (Result<void> made = create_host_buffer(handle, physical, upload_bytes,
-                                               VK_BUFFER_USAGE_TRANSFER_SRC_BIT, frame.upload,
-                                               frame.upload_memory);
-        !made) {
-        return made.error().with_context("upload buffer");
-    }
-    if (Result<void> made = create_host_buffer(handle, physical, frame_bytes,
-                                               VK_BUFFER_USAGE_TRANSFER_DST_BIT, frame.readback,
-                                               frame.readback_memory);
-        !made) {
-        return made.error().with_context("readback buffer");
-    }
-
-    if (!drawn.empty()) {
-        void* mapped = nullptr;
-        VkResult result = vkMapMemory(handle, frame.upload_memory, 0, upload_bytes, 0, &mapped);
-        if (result != VK_SUCCESS) {
-            return detail::from_vulkan(result, "cannot map the upload buffer");
-        }
-        auto* bytes = static_cast<std::uint8_t*>(mapped);
-        for (std::size_t i = 0; i < drawn.size(); ++i) {
-            std::memcpy(bytes + i * static_cast<std::size_t>(frame_bytes),
-                        drawn[i]->source.pixels.data(), static_cast<std::size_t>(frame_bytes));
-        }
-        vkUnmapMemory(handle, frame.upload_memory);
-    }
-
-    VkDescriptorPoolSize pool_size{};
-    pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    pool_size.descriptorCount = 2;
-
-    VkDescriptorPoolCreateInfo pool_create{};
-    pool_create.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pool_create.maxSets = 1;
-    pool_create.poolSizeCount = 1;
-    pool_create.pPoolSizes = &pool_size;
-    VkResult result = vkCreateDescriptorPool(handle, &pool_create, nullptr, &frame.descriptor_pool);
+    VkResult result = vkResetCommandBuffer(frame.command_buffer, 0);
     if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot create the composite descriptor pool");
-    }
-
-    VkDescriptorSetAllocateInfo set_allocate{};
-    set_allocate.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    set_allocate.descriptorPool = frame.descriptor_pool;
-    set_allocate.descriptorSetCount = 1;
-    set_allocate.pSetLayouts = &impl_->set_layout;
-
-    VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
-    result = vkAllocateDescriptorSets(handle, &set_allocate, &descriptor_set);
-    if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot allocate the composite descriptor set");
-    }
-
-    // The two images never change across layers -- only the contents of the
-    // source do -- so the descriptor set is written once.
-    VkDescriptorImageInfo destination_info{};
-    destination_info.imageView = frame.destination_view;
-    destination_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    VkDescriptorImageInfo source_info{};
-    source_info.imageView = frame.source_view;
-    source_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-    VkWriteDescriptorSet writes[2]{};
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = descriptor_set;
-    writes[0].dstBinding = 0;
-    writes[0].descriptorCount = 1;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[0].pImageInfo = &destination_info;
-    writes[1] = writes[0];
-    writes[1].dstBinding = 1;
-    writes[1].pImageInfo = &source_info;
-    vkUpdateDescriptorSets(handle, 2, writes, 0, nullptr);
-
-    VkCommandBufferAllocateInfo command_allocate{};
-    command_allocate.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    command_allocate.commandPool = impl_->device->command_pool;
-    command_allocate.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    command_allocate.commandBufferCount = 1;
-    result = vkAllocateCommandBuffers(handle, &command_allocate, &frame.command_buffer);
-    if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot allocate a command buffer");
+        return detail::from_vulkan(result, "cannot reset the command buffer");
     }
 
     VkCommandBufferBeginInfo begin{};
@@ -445,8 +505,9 @@ Result<ImageRgba8> Compositor::composite(const std::vector<Layer>& layers, int w
     }
 
     // The backdrop is opaque black. A timeline with nothing on it shows black,
-    // not uninitialised memory, and clearing explicitly is what guarantees that
-    // when every layer is disabled.
+    // not whatever the previous frame left behind, so this clear happens even
+    // when there is nothing to draw. The source layout is UNDEFINED here because
+    // its previous contents are never reused.
     image_barrier(frame.command_buffer, frame.destination, VK_IMAGE_LAYOUT_UNDEFINED,
                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
                   VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
@@ -468,7 +529,7 @@ Result<ImageRgba8> Compositor::composite(const std::vector<Layer>& layers, int w
 
     vkCmdBindPipeline(frame.command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->pipeline);
     vkCmdBindDescriptorSets(frame.command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            impl_->pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
+                            impl_->pipeline_layout, 0, 1, &frame.descriptor_set, 0, nullptr);
 
     for (std::size_t i = 0; i < drawn.size(); ++i) {
         VkBufferImageCopy copy{};
@@ -521,11 +582,9 @@ Result<ImageRgba8> Compositor::composite(const std::vector<Layer>& layers, int w
         return detail::from_vulkan(result, "cannot end the command buffer");
     }
 
-    VkFenceCreateInfo fence_create{};
-    fence_create.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    result = vkCreateFence(handle, &fence_create, nullptr, &frame.fence);
+    result = vkResetFences(handle, 1, &frame.fence);
     if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot create a fence");
+        return detail::from_vulkan(result, "cannot reset the fence");
     }
 
     VkSubmitInfo submit{};

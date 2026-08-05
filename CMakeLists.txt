@@ -85,6 +85,7 @@ add_subdirectory(src/gpu)
 add_subdirectory(src/playback)
 add_subdirectory(src/timeline)
 add_subdirectory(tools/rf_gpu_info)
+add_subdirectory(tools/rf_playback_bench)
 add_subdirectory(tools/rf_seek_check)
 add_subdirectory(tools/rf_version)
 
