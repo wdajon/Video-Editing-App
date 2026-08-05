@@ -1,5 +1,127 @@
 # Progress
 
+## M3 — GPU compositor + Program monitor playback
+
+**Exit gate:** 1080x1920, 3 layers, sustained 30 fps playback, no dropped frames
+over 60 s. **Gate status: NOT MET** — nothing composites layers yet, and no
+frame has been presented to a screen.
+
+**Reference machine for every performance number in this milestone:** AMD Ryzen
+9 5900X (12 cores), NVIDIA GeForce RTX 3070 (8 GiB, Vulkan 1.4.341), Windows 11.
+
+### What CI can and cannot prove here
+
+CI runners have no GPU. Linux jobs install Mesa's **lavapipe**, a real Vulkan
+implementation running on the CPU, so API misuse, validation errors, wrong
+pixels and lifetime bugs are all caught on every commit. It is roughly two
+orders of magnitude slower than hardware — `Instance.CreatesAndEnumerates` takes
+2.35 s there against milliseconds on the RTX 3070.
+
+**A green CI does not mean the M3 frame-rate gate is met, and never will.** That
+number comes from the reference machine and is recorded with its hardware, the
+same arrangement as the M1 seek baseline. This is written down because it is
+exactly the kind of distinction that erodes quietly.
+
+### Iteration 3 — headless compute render, verified pixel-exact
+
+The whole compute path end to end: logical device, memory type selection,
+storage image, descriptors, embedded SPIR-V, compute pipeline, layout barriers,
+submission, fence, readback. Verified on the RTX 3070 and on lavapipe, including
+a full 1080x1920 frame.
+
+```
+100% tests passed, 0 tests failed out of 249
+```
+
+**A crash was the most useful result.** `Device.OpensThePreferredDevice` died
+with `0xc0000409` — a hard fault, not a failed assertion. The test helper let an
+`Instance` be destroyed while a `Device` created from it was still alive, which
+is undefined behaviour in Vulkan.
+
+The fix went into the API, not the test. `Instance` now holds its implementation
+in a `shared_ptr` and `Device` keeps a copy, so the instance outlives every
+device made from it. An API where that rule is only documented is an API where
+it gets violated, and the first test to touch the boundary proved it. The shared
+pointer is declared first in `Device::Impl` so it is destroyed last — members die
+in reverse declaration order, and the `VkDevice` has to go first.
+
+**Two choices that keep the test able to fail:**
+
+- The bring-up pattern is deliberately not a gradient. A gradient is symmetric
+  enough that transposed axes, a wrong row stride, or a half-dispatched image
+  can all still look plausible; encoding x and y differently makes those
+  mistakes produce a mismatch.
+- The expected image is written from the shader's specification on the CPU,
+  never captured from a GPU run, so a wrong shader cannot quietly become the
+  expected answer. Comparison is exact equality — `float(v % 256) / 255.0` into
+  rgba8 unorm rounds back to `v % 256`.
+
+`61x37` against an 8x8 workgroup is tested specifically: dispatches round up, so
+the shader must bounds-check, and the edges must still be written rather than
+left as whatever the allocation happened to contain.
+
+### Iteration 2 — Vulkan device layer
+
+Instance creation, device enumeration, capability reporting and selection, plus
+`rf_gpu_info` so a user reporting a rendering problem can say what they are
+running without installing a Vulkan SDK.
+
+Vulkan is loaded dynamically through volk rather than linked against the SDK:
+vcpkg's `vulkan` port needs a `VULKAN_SDK` variable, which would make a clean
+clone fail on a machine without a manual install — the hidden prerequisite ADR
+001 exists to prevent. It also means a machine with no driver is a runtime
+condition the editor can report rather than a link error that stops it starting.
+
+Vulkan include directories are PRIVATE to `rf_gpu`, so ADR 007's layering rule
+is a compiler error rather than a review comment.
+
+The ASan job immediately caught a 128-byte leak from the Vulkan loader's
+process-global state, which it frees only on library unload while volk never
+calls `dlclose`. Suppressed narrowly rather than by disabling leak detection for
+the binary: `rf_gpu` is where leak detection matters most, since every Vulkan
+object in the project is freed by hand there. `print_suppressions=1` stays on so
+a stale suppression becomes visible (D12).
+
+### Iteration 1 — the playback clock and frame accounting
+
+Built before any GPU code, for the same reason M1's time model came before the
+decoder: **the gate's claim is only as good as its definition.**
+
+Three ways "no dropped frames over 60 s" gets faked, all rejected explicitly in
+ADR 006 — averaging (1,800 frames in 60 s averages 30 fps and can stutter
+throughout), deriving position from a frame counter (which makes drops
+impossible by construction and the metric worthless), and floating-point time
+(which drifts off the frame grid exactly as M1 spent a milestone avoiding).
+
+Position is a pure function of elapsed wall time, never accumulated, so a
+stalled renderer changes what the user sees without changing where playback is.
+That is what makes a drop detectable rather than absorbed.
+
+The clock is injected, so the full 1,800-frame gate scenario is a unit test that
+runs in milliseconds instead of a 60-second sleep.
+
+A drop is defined narrowly and each exclusion has a test: a late frame that is
+still the right frame is pacing, not a drop; a repeated frame while paused is
+not; frames jumped over by a seek were never due. Conflating them would report
+two different failures as one and send the fix in the wrong direction. The
+inverse test matters as much — a renderer managing only 15 fps must be reported
+as dropping 899 frames, or the gate is decorative.
+
+**One real defect, caught by a round-trip test written for exactly this class:**
+`time_of_frame` rounded to nearest, which can land a nanosecond before the true
+boundary, and `frame_at` then floors to the previous frame. The correct rounding
+depends on direction of play — forward wants the earliest instant at or after
+the boundary, reverse the latest at or before.
+
+### Remaining for M3
+
+1. Composite multiple layers with alpha, against golden frames.
+2. Present to the Program monitor (swapchain), which is the first code that
+   needs a window.
+3. Measure sustained playback on the reference machine and record it here.
+4. Hardware-accelerated decode, without which D9's 150 ms seek budget stays
+   unmet and playback of 4K source cannot feed the compositor.
+
 ## M2 — Timeline data model + undo/redo command stack
 
 **Exit gate:** 10,000-op fuzz on the command stack; undo returns to a
