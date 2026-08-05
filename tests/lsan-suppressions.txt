@@ -1,0 +1,30 @@
+# LeakSanitizer suppressions, applied ONLY to rf_gpu_tests.
+#
+# The Vulkan loader allocates process-global state on first use -- its ICD list
+# and layer manifests -- and frees it when the library is unloaded. volk opens
+# the loader with dlopen and never calls dlclose, so at process exit LSan sees
+# a single unreachable allocation:
+#
+#   Direct leak of 128 byte(s) in 1 object(s) allocated from:
+#     #0 realloc
+#     #1 <unknown module>
+#
+# Evidence that this is the loader's and not ReelForge's: it is exactly one
+# fixed-size allocation no matter how many devices are enumerated or how many
+# instances are created and destroyed, and the test that only calls
+# vulkan_available() -- which dlopens the loader but creates nothing -- does not
+# trigger it.
+#
+# These patterns are deliberately narrow. Blanket-disabling leak detection for
+# this binary was rejected: rf_gpu is exactly where leak detection earns its
+# keep, because Vulkan objects are freed by hand and every one of them will be
+# allocated in this module. A suppression that only covers the loader keeps
+# ReelForge's own leaks failing the build.
+#
+# Tracked as D12: revisit if the loader ever grows a documented teardown call.
+
+leak:libvulkan
+leak:vkCreateInstance
+leak:vkEnumerateInstanceLayerProperties
+leak:loader_
+leak:vk_loader

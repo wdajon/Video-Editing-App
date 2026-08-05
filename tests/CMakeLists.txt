@@ -53,9 +53,17 @@ target_link_libraries(rf_gpu_tests
         GTest::gtest
         GTest::gtest_main)
 
+# The Vulkan loader leaks one fixed-size allocation of process-global state that
+# it only frees on library unload, and volk never unloads it. Suppressed narrowly
+# rather than by disabling leak detection for this binary: rf_gpu is where leak
+# detection matters most, since every Vulkan object here is freed by hand.
+# See tests/lsan-suppressions.txt.
 gtest_discover_tests(rf_gpu_tests
     DISCOVERY_MODE PRE_TEST
-    PROPERTIES LABELS "gpu")
+    PROPERTIES
+        LABELS "gpu"
+        ENVIRONMENT
+            "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan-suppressions.txt:print_suppressions=1")
 
 add_executable(rf_playback_tests
     playback/frame_log_test.cpp

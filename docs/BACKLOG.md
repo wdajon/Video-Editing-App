@@ -22,6 +22,9 @@ creep gets refused without losing the idea.
 
 | D10 | M2 i1 | **TSan does not cover libav's internal threading.** vcpkg builds FFmpeg without sanitizer instrumentation, so ThreadSanitizer cannot observe libav's own happens-before edges and reports its frame threading as data races — every frame landing in `pthread_frame.c`, `frame.c` or `h2645_parse.c`. Decoder threading is therefore forced to one thread under TSan (`RF_THREAD_SANITIZER`), which means **the TSan job validates ReelForge's concurrency but not the multi-threaded decode path that ships**. Suppressions were rejected: they would also hide real races surfacing through a libav call. Fix: build FFmpeg with `-fsanitize=thread` via a custom vcpkg triplet for the TSan job only. | M3 (job system — the first ReelForge code that is genuinely concurrent) |
 
+| D11 | M3 i2 | **The OpenGL 4.3 fallback required by the brief does not exist.** Only the Vulkan path is built. Deferred deliberately (ADR 007): an abstraction cannot be designed honestly from a single implementation, and inventing a seam now risks one that fits neither backend. The constraint accepted in exchange is enforced by the build — Vulkan include directories are PRIVATE to `rf_gpu` — so the extraction stays confined to one module. | M3 exit (the brief names it as a stack constraint) |
+| D12 | M3 i2 | The Vulkan loader leaks one fixed-size allocation of process-global state, freed only on library unload, and volk never `dlclose`s it. Suppressed narrowly for `rf_gpu_tests` via `tests/lsan-suppressions.txt` rather than by disabling leak detection, because `rf_gpu` is where leak detection matters most — every Vulkan object there is freed by hand. `print_suppressions=1` is on so the CI log shows whether the suppression is still matching anything; if it stops matching, the suppression is stale and should be deleted. | — |
+
 ## Deferred work
 
 - **vcpkg binary caching in CI** (ADR 001). Clean builds will get slow once
