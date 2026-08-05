@@ -1,4 +1,4 @@
-# rf_gpu owns every Vulkan type in the project.
+﻿# rf_gpu owns every Vulkan type in the project.
 #
 # The Vulkan include directories are PRIVATE, so ADR 007's rule -- nothing above
 # this layer includes a Vulkan header -- is enforced by the compiler rather than
@@ -11,11 +11,16 @@ find_package(volk CONFIG REQUIRED)
 include(ReelForgeShaders)
 
 add_library(rf_gpu STATIC
+    compositor.cpp
     device.cpp
     device_info.cpp
     image.cpp
     instance.cpp
+    device_impl.hpp
     instance_impl.hpp
+    vulkan_util.cpp
+    vulkan_util.hpp
+    "${PROJECT_SOURCE_DIR}/include/rf/gpu/compositor.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/gpu/device.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/gpu/device_info.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/gpu/image.hpp"
@@ -29,6 +34,10 @@ add_library(rf::gpu ALIAS rf_gpu)
 rf_add_shader(rf_gpu
     SOURCE "${PROJECT_SOURCE_DIR}/shaders/fill_pattern.comp"
     SYMBOL fill_pattern)
+
+rf_add_shader(rf_gpu
+    SOURCE "${PROJECT_SOURCE_DIR}/shaders/composite.comp"
+    SYMBOL composite)
 
 target_include_directories(rf_gpu PUBLIC "${PROJECT_SOURCE_DIR}/include")
 

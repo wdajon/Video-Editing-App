@@ -44,6 +44,7 @@ gtest_discover_tests(rf_media_tests
     PROPERTIES LABELS "media")
 
 add_executable(rf_gpu_tests
+    gpu/compositor_test.cpp
     gpu/device_test.cpp
     gpu/instance_test.cpp)
 

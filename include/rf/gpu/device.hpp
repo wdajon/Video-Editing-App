@@ -1,4 +1,4 @@
-// A logical GPU device and the headless compute path.
+﻿// A logical GPU device and the headless compute path.
 //
 // Rendering is headless by design (ADR 007): the render graph produces images,
 // and putting one on screen is a separate concern. That is what lets golden
@@ -46,8 +46,17 @@ public:
 
 private:
     class Impl;
-    explicit Device(std::unique_ptr<Impl> impl) noexcept;
-    std::unique_ptr<Impl> impl_;
+    explicit Device(std::shared_ptr<Impl> impl) noexcept;
+    // Shared for the same reason Instance::impl_ is: a Compositor records work
+    // against this device and must not outlive it. Enforced by ownership
+    // rather than by documentation, after a lifetime bug of exactly this
+    // shape crashed a test rather than failing an assertion.
+    std::shared_ptr<Impl> impl_;
+
+    // The compositor records its own command buffers against this device's
+    // queue and pool. Granting access here keeps every Vulkan handle out of
+    // this header, which is the point of the pimpl (ADR 007).
+    friend class Compositor;
 };
 
 }  // namespace rf::gpu

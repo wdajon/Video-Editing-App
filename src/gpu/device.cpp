@@ -1,4 +1,4 @@
-#include "rf/gpu/device.hpp"
+﻿#include "rf/gpu/device.hpp"
 
 #include <cstring>
 #include <memory>
@@ -8,86 +8,12 @@
 
 #include <volk.h>
 
+#include "device_impl.hpp"
 #include "instance_impl.hpp"
+#include "vulkan_util.hpp"
 #include "rf/gpu/shaders/fill_pattern.hpp"
 
 namespace rf::gpu {
-namespace {
-
-[[nodiscard]] Error from_vulkan(VkResult result, std::string_view context) {
-    Errc code = Errc::internal;
-    switch (result) {
-        case VK_ERROR_OUT_OF_HOST_MEMORY:
-        case VK_ERROR_OUT_OF_DEVICE_MEMORY:
-            code = Errc::out_of_memory;
-            break;
-        case VK_ERROR_DEVICE_LOST:
-            code = Errc::device_lost;
-            break;
-        case VK_ERROR_INITIALIZATION_FAILED:
-        case VK_ERROR_FEATURE_NOT_PRESENT:
-            code = Errc::unsupported_format;
-            break;
-        default:
-            break;
-    }
-    return Error{code, std::string{context} + " (VkResult " + std::to_string(result) + ")"};
-}
-
-/// Finds a memory type satisfying both the resource's requirements and the
-/// properties we need. There is no universal "device local" or "host visible"
-/// index -- it varies per device, and hardcoding one is a bug that only shows
-/// up on somebody else's hardware.
-[[nodiscard]] Result<std::uint32_t> find_memory_type(VkPhysicalDevice physical,
-                                                     std::uint32_t type_bits,
-                                                     VkMemoryPropertyFlags wanted) {
-    VkPhysicalDeviceMemoryProperties properties{};
-    vkGetPhysicalDeviceMemoryProperties(physical, &properties);
-    for (std::uint32_t i = 0; i < properties.memoryTypeCount; ++i) {
-        const bool allowed = (type_bits & (1u << i)) != 0;
-        const bool suitable = (properties.memoryTypes[i].propertyFlags & wanted) == wanted;
-        if (allowed && suitable) {
-            return i;
-        }
-    }
-    return Error{Errc::unsupported_format, "no memory type satisfies the required properties"};
-}
-
-}  // namespace
-
-class Device::Impl {
-public:
-    /// Keeps the VkInstance alive for at least as long as this device.
-    ///
-    /// Declared first so it is destroyed LAST: member destruction runs in
-    /// reverse declaration order, and the VkDevice below must be gone before
-    /// the instance that owns its physical device.
-    std::shared_ptr<Instance::Impl> instance;
-
-    VkPhysicalDevice physical = VK_NULL_HANDLE;
-    VkDevice device = VK_NULL_HANDLE;
-    VkQueue queue = VK_NULL_HANDLE;
-    VkCommandPool command_pool = VK_NULL_HANDLE;
-    DeviceInfo info;
-
-    Impl() = default;
-    Impl(const Impl&) = delete;
-    Impl& operator=(const Impl&) = delete;
-
-    ~Impl() {
-        if (device == VK_NULL_HANDLE) {
-            return;
-        }
-        // Work may still be in flight if a submission failed part-way; waiting
-        // makes destruction safe regardless of how we got here.
-        vkDeviceWaitIdle(device);
-        if (command_pool != VK_NULL_HANDLE) {
-            vkDestroyCommandPool(device, command_pool, nullptr);
-        }
-        vkDestroyDevice(device, nullptr);
-    }
-};
-
 namespace {
 
 /// Everything created for a single headless dispatch, destroyed in reverse
@@ -151,7 +77,7 @@ struct PatternPush {
 
 }  // namespace
 
-Device::Device(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+Device::Device(std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 Device::Device(Device&&) noexcept = default;
 Device& Device::operator=(Device&&) noexcept = default;
 Device::~Device() = default;
@@ -178,18 +104,18 @@ Result<Device> Device::create(const Instance& instance, std::size_t device_index
     std::uint32_t count = 0;
     VkResult result = vkEnumeratePhysicalDevices(instance.impl_->instance, &count, nullptr);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot enumerate physical devices");
+        return detail::from_vulkan(result, "cannot enumerate physical devices");
     }
     std::vector<VkPhysicalDevice> handles(count);
     result = vkEnumeratePhysicalDevices(instance.impl_->instance, &count, handles.data());
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot enumerate physical devices");
+        return detail::from_vulkan(result, "cannot enumerate physical devices");
     }
     if (device_index >= handles.size()) {
         return Error{Errc::internal, "device list changed between enumerations"};
     }
 
-    auto impl = std::make_unique<Impl>();
+    auto impl = std::make_shared<Impl>();
     impl->instance = instance.impl_;
     impl->physical = handles[device_index];
     impl->info = info;
@@ -208,7 +134,7 @@ Result<Device> Device::create(const Instance& instance, std::size_t device_index
 
     result = vkCreateDevice(impl->physical, &device_create, nullptr, &impl->device);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot create a logical device for " + info.name);
+        return detail::from_vulkan(result, "cannot create a logical device for " + info.name);
     }
 
     // Device-level entry points bypass the loader's dispatch trampoline.
@@ -222,7 +148,7 @@ Result<Device> Device::create(const Instance& instance, std::size_t device_index
     pool_create.queueFamilyIndex = info.compute_queue_family;
     result = vkCreateCommandPool(impl->device, &pool_create, nullptr, &impl->command_pool);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot create a command pool");
+        return detail::from_vulkan(result, "cannot create a command pool");
     }
 
     return Device{std::move(impl)};
@@ -266,12 +192,12 @@ Result<ImageRgba8> Device::render_fill_pattern(int width, int height) {
 
     VkResult result = vkCreateImage(impl_->device, &image_create, nullptr, &pass.image);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot create the output image");
+        return detail::from_vulkan(result, "cannot create the output image");
     }
 
     VkMemoryRequirements image_requirements{};
     vkGetImageMemoryRequirements(impl_->device, pass.image, &image_requirements);
-    Result<std::uint32_t> image_memory_type = find_memory_type(
+    Result<std::uint32_t> image_memory_type = detail::find_memory_type(
         impl_->physical, image_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     if (!image_memory_type) {
         return image_memory_type.error().with_context("output image");
@@ -283,11 +209,11 @@ Result<ImageRgba8> Device::render_fill_pattern(int width, int height) {
     image_allocate.memoryTypeIndex = image_memory_type.value();
     result = vkAllocateMemory(impl_->device, &image_allocate, nullptr, &pass.image_memory);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot allocate image memory");
+        return detail::from_vulkan(result, "cannot allocate image memory");
     }
     result = vkBindImageMemory(impl_->device, pass.image, pass.image_memory, 0);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot bind image memory");
+        return detail::from_vulkan(result, "cannot bind image memory");
     }
 
     VkImageViewCreateInfo view_create{};
@@ -298,7 +224,7 @@ Result<ImageRgba8> Device::render_fill_pattern(int width, int height) {
     view_create.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     result = vkCreateImageView(impl_->device, &view_create, nullptr, &pass.image_view);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot create the image view");
+        return detail::from_vulkan(result, "cannot create the image view");
     }
 
     // --- readback buffer ------------------------------------------------------
@@ -309,14 +235,14 @@ Result<ImageRgba8> Device::render_fill_pattern(int width, int height) {
     buffer_create.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     result = vkCreateBuffer(impl_->device, &buffer_create, nullptr, &pass.readback);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot create the readback buffer");
+        return detail::from_vulkan(result, "cannot create the readback buffer");
     }
 
     VkMemoryRequirements buffer_requirements{};
     vkGetBufferMemoryRequirements(impl_->device, pass.readback, &buffer_requirements);
     // HOST_COHERENT avoids an explicit invalidate before reading the mapping.
     Result<std::uint32_t> buffer_memory_type =
-        find_memory_type(impl_->physical, buffer_requirements.memoryTypeBits,
+        detail::find_memory_type(impl_->physical, buffer_requirements.memoryTypeBits,
                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     if (!buffer_memory_type) {
         return buffer_memory_type.error().with_context("readback buffer");
@@ -328,11 +254,11 @@ Result<ImageRgba8> Device::render_fill_pattern(int width, int height) {
     buffer_allocate.memoryTypeIndex = buffer_memory_type.value();
     result = vkAllocateMemory(impl_->device, &buffer_allocate, nullptr, &pass.readback_memory);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot allocate readback memory");
+        return detail::from_vulkan(result, "cannot allocate readback memory");
     }
     result = vkBindBufferMemory(impl_->device, pass.readback, pass.readback_memory, 0);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot bind readback memory");
+        return detail::from_vulkan(result, "cannot bind readback memory");
     }
 
     // --- descriptors ----------------------------------------------------------
@@ -348,7 +274,7 @@ Result<ImageRgba8> Device::render_fill_pattern(int width, int height) {
     layout_create.pBindings = &binding;
     result = vkCreateDescriptorSetLayout(impl_->device, &layout_create, nullptr, &pass.set_layout);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot create the descriptor set layout");
+        return detail::from_vulkan(result, "cannot create the descriptor set layout");
     }
 
     VkDescriptorPoolSize pool_size{};
@@ -362,7 +288,7 @@ Result<ImageRgba8> Device::render_fill_pattern(int width, int height) {
     pool_create.pPoolSizes = &pool_size;
     result = vkCreateDescriptorPool(impl_->device, &pool_create, nullptr, &pass.descriptor_pool);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot create the descriptor pool");
+        return detail::from_vulkan(result, "cannot create the descriptor pool");
     }
 
     VkDescriptorSetAllocateInfo set_allocate{};
@@ -374,7 +300,7 @@ Result<ImageRgba8> Device::render_fill_pattern(int width, int height) {
     VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
     result = vkAllocateDescriptorSets(impl_->device, &set_allocate, &descriptor_set);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot allocate the descriptor set");
+        return detail::from_vulkan(result, "cannot allocate the descriptor set");
     }
 
     VkDescriptorImageInfo descriptor_image{};
@@ -397,7 +323,7 @@ Result<ImageRgba8> Device::render_fill_pattern(int width, int height) {
     shader_create.pCode = shaders::fill_pattern;
     result = vkCreateShaderModule(impl_->device, &shader_create, nullptr, &pass.shader);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot create the shader module");
+        return detail::from_vulkan(result, "cannot create the shader module");
     }
 
     VkPushConstantRange push_range{};
@@ -414,7 +340,7 @@ Result<ImageRgba8> Device::render_fill_pattern(int width, int height) {
     result = vkCreatePipelineLayout(impl_->device, &pipeline_layout_create, nullptr,
                                     &pass.pipeline_layout);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot create the pipeline layout");
+        return detail::from_vulkan(result, "cannot create the pipeline layout");
     }
 
     VkComputePipelineCreateInfo pipeline_create{};
@@ -427,7 +353,7 @@ Result<ImageRgba8> Device::render_fill_pattern(int width, int height) {
     result = vkCreateComputePipelines(impl_->device, VK_NULL_HANDLE, 1, &pipeline_create, nullptr,
                                       &pass.pipeline);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot create the compute pipeline");
+        return detail::from_vulkan(result, "cannot create the compute pipeline");
     }
 
     // --- record and submit ----------------------------------------------------
@@ -438,7 +364,7 @@ Result<ImageRgba8> Device::render_fill_pattern(int width, int height) {
     command_allocate.commandBufferCount = 1;
     result = vkAllocateCommandBuffers(impl_->device, &command_allocate, &pass.command_buffer);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot allocate a command buffer");
+        return detail::from_vulkan(result, "cannot allocate a command buffer");
     }
 
     VkCommandBufferBeginInfo begin{};
@@ -446,7 +372,7 @@ Result<ImageRgba8> Device::render_fill_pattern(int width, int height) {
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     result = vkBeginCommandBuffer(pass.command_buffer, &begin);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot begin the command buffer");
+        return detail::from_vulkan(result, "cannot begin the command buffer");
     }
 
     // UNDEFINED -> GENERAL. The contents are not preserved, which is correct:
@@ -505,14 +431,14 @@ Result<ImageRgba8> Device::render_fill_pattern(int width, int height) {
 
     result = vkEndCommandBuffer(pass.command_buffer);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot end the command buffer");
+        return detail::from_vulkan(result, "cannot end the command buffer");
     }
 
     VkFenceCreateInfo fence_create{};
     fence_create.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     result = vkCreateFence(impl_->device, &fence_create, nullptr, &pass.fence);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot create a fence");
+        return detail::from_vulkan(result, "cannot create a fence");
     }
 
     VkSubmitInfo submit{};
@@ -521,7 +447,7 @@ Result<ImageRgba8> Device::render_fill_pattern(int width, int height) {
     submit.pCommandBuffers = &pass.command_buffer;
     result = vkQueueSubmit(impl_->queue, 1, &submit, pass.fence);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot submit work");
+        return detail::from_vulkan(result, "cannot submit work");
     }
 
     // A generous but finite timeout. Waiting forever on a wedged driver would
@@ -533,14 +459,14 @@ Result<ImageRgba8> Device::render_fill_pattern(int width, int height) {
         return Error{Errc::timeout, "the GPU did not finish within 10 seconds"};
     }
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "waiting for the GPU failed");
+        return detail::from_vulkan(result, "waiting for the GPU failed");
     }
 
     // --- readback -------------------------------------------------------------
     void* mapped = nullptr;
     result = vkMapMemory(impl_->device, pass.readback_memory, 0, byte_count, 0, &mapped);
     if (result != VK_SUCCESS) {
-        return from_vulkan(result, "cannot map the readback buffer");
+        return detail::from_vulkan(result, "cannot map the readback buffer");
     }
 
     ImageRgba8 image;

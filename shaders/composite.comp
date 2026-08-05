@@ -1,0 +1,42 @@
+#version 450
+
+// Blends one layer over the accumulating frame, bottom to top.
+//
+// Run once per layer rather than taking an array of images: descriptor array
+// limits vary by device, and a timeline can carry more layers than the smallest
+// of those allows. Iterating also matches how the layers are actually stacked,
+// so adding a blend mode later is a change to this shader rather than to the
+// dispatch structure.
+//
+// The destination is opaque. A Program monitor shows a finished frame composited
+// over black, not a transparency-preserving buffer -- nested compositions with
+// real alpha are an M8 concern and will need premultiplied intermediates.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0, rgba8) uniform image2D destination;
+layout(binding = 1, rgba8) uniform readonly image2D source;
+
+layout(push_constant) uniform Push {
+    uint width;
+    uint height;
+    float opacity;
+} push;
+
+void main() {
+    uvec2 pixel = gl_GlobalInvocationID.xy;
+    if (pixel.x >= push.width || pixel.y >= push.height) {
+        return;
+    }
+
+    vec4 above = imageLoad(source, ivec2(pixel));
+    vec4 below = imageLoad(destination, ivec2(pixel));
+
+    // Source-over with straight alpha, against an opaque backdrop. Because the
+    // destination is known opaque, the general formula's division by the result
+    // alpha drops out and this stays a plain lerp.
+    float coverage = above.a * push.opacity;
+    vec3 blended = above.rgb * coverage + below.rgb * (1.0 - coverage);
+
+    imageStore(destination, ivec2(pixel), vec4(blended, 1.0));
+}
