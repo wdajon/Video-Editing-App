@@ -43,6 +43,21 @@ gtest_discover_tests(rf_media_tests
     DISCOVERY_MODE PRE_TEST
     PROPERTIES LABELS "media")
 
+add_executable(rf_playback_tests
+    playback/frame_log_test.cpp
+    playback/playback_clock_test.cpp)
+
+target_link_libraries(rf_playback_tests
+    PRIVATE
+        rf::playback
+        rf::warnings
+        GTest::gtest
+        GTest::gtest_main)
+
+gtest_discover_tests(rf_playback_tests
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES LABELS "playback")
+
 add_executable(rf_timeline_tests
     timeline/command_fuzz_test.cpp
     timeline/command_test.cpp

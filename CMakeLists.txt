@@ -81,6 +81,7 @@ endif()
 
 add_subdirectory(src/core)
 add_subdirectory(src/media)
+add_subdirectory(src/playback)
 add_subdirectory(src/timeline)
 add_subdirectory(tools/rf_seek_check)
 add_subdirectory(tools/rf_version)
