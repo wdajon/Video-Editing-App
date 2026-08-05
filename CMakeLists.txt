@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24)
+﻿cmake_minimum_required(VERSION 3.24)
 
 # FFmpeg is built by vcpkg through MSYS/autotools, and its configure step passes
 # the vcpkg library directory to link.exe as an unquoted -libpath. A space in
@@ -81,8 +81,10 @@ endif()
 
 add_subdirectory(src/core)
 add_subdirectory(src/media)
+add_subdirectory(src/gpu)
 add_subdirectory(src/playback)
 add_subdirectory(src/timeline)
+add_subdirectory(tools/rf_gpu_info)
 add_subdirectory(tools/rf_seek_check)
 add_subdirectory(tools/rf_version)
 

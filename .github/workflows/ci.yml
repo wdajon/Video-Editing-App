@@ -57,6 +57,12 @@ jobs:
           sudo apt-get install -y nasm pkg-config
           # Qt 6 Widgets links these even when only the offscreen platform is used.
           sudo apt-get install -y libgl1-mesa-dev libxkbcommon-dev libvulkan-dev
+          # lavapipe: a real Vulkan implementation running on the CPU. CI runners
+          # have no GPU, and without this the GPU tests would skip on every run
+          # and the Vulkan code would ship unexercised. It catches API misuse,
+          # validation errors and wrong pixels; it cannot say anything about
+          # frame rate. See docs/adr/007-gpu-backend.md.
+          sudo apt-get install -y libvulkan1 mesa-vulkan-drivers vulkan-tools
 
       # Official Qt binaries, fetched without a Qt account. See ADR 003 for why
       # Qt is not in the vcpkg manifest.
@@ -179,6 +185,15 @@ jobs:
             ./build/${{ matrix.preset }}/bin/rf_seek_check \
               "tests/fixtures/media/$f" --seeks 300 --budget-ms 250
           done
+
+      # Informational, never gating. Linux runners have lavapipe and report a
+      # software device; Windows runners have no Vulkan driver at all and this
+      # exits 2. Neither is a build failure -- the GPU tests themselves skip or
+      # run as appropriate, and this step exists so the log records which.
+      - name: Report GPU devices
+        continue-on-error: true
+        shell: bash
+        run: ./build/${{ matrix.preset }}/bin/rf_gpu_info
 
       - name: Smoke run (application shell)
         shell: bash

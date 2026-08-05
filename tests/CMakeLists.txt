@@ -1,4 +1,4 @@
-find_package(GTest CONFIG REQUIRED)
+﻿find_package(GTest CONFIG REQUIRED)
 include(GoogleTest)
 
 add_executable(rf_core_tests
@@ -42,6 +42,20 @@ target_compile_definitions(rf_media_tests
 gtest_discover_tests(rf_media_tests
     DISCOVERY_MODE PRE_TEST
     PROPERTIES LABELS "media")
+
+add_executable(rf_gpu_tests
+    gpu/instance_test.cpp)
+
+target_link_libraries(rf_gpu_tests
+    PRIVATE
+        rf::gpu
+        rf::warnings
+        GTest::gtest
+        GTest::gtest_main)
+
+gtest_discover_tests(rf_gpu_tests
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES LABELS "gpu")
 
 add_executable(rf_playback_tests
     playback/frame_log_test.cpp
