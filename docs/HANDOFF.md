@@ -1,4 +1,4 @@
-# Handoff — resuming ReelForge in a new session
+﻿# Handoff â€” resuming ReelForge in a new session
 
 Read this first, then `docs/PROGRESS.md` (state), `docs/BACKLOG.md` (open
 defects), and `docs/adr/` (why things are the way they are). The mission and the
@@ -12,22 +12,30 @@ Repository: https://github.com/wdajon/Video-Editing-App (public)
 
 | Milestone | State |
 |---|---|
-| M0 — repo, CMake, deps, CI, Qt shell | **Gate met.** Six-job CI matrix green. |
-| M1 — probe, decode, frame-accurate seek | **Gate met.** 200/200 random seeks correct on a 10-min 4K file. Performance budget **not** met — see D9. |
-| M2 — timeline model + undo/redo | **Gate met.** 10,000-operation fuzz, undo returns byte-identical. |
-| M3 — GPU compositor + playback | **In progress, 3 iterations.** Gate not met. |
+| M0 â€” repo, CMake, deps, CI, Qt shell | **Gate met.** Six-job CI matrix green. |
+| M1 â€” probe, decode, frame-accurate seek | **Gate met.** 200/200 random seeks correct on a 10-min 4K file. Performance budget **not** met â€” see D9. |
+| M2 â€” timeline model + undo/redo | **Gate met.** 10,000-operation fuzz, undo returns byte-identical. |
+| M3 â€” GPU compositor + playback | **In progress, 3 iterations.** Gate not met. |
 | M4 onward | Not started. |
 
 249 tests. Zero warnings at `/W4 /WX` and `-Wall -Wextra -Werror`.
 
 ### What M3 still needs
 
-1. Composite multiple layers with alpha, against golden frames.
-2. Present to the Program monitor (swapchain) — first code needing a window.
-3. Measure sustained playback on the reference machine and record it.
-4. **Hardware-accelerated decode.** Now on the critical path: CPU decode manages
-   ~66 fps on 4K, and three layers at 30 fps needs ~90 decoded frames per second
-   before any compositing. Also what D9 needs.
+The gate was measured, not guessed: p50 49.90 ms against a 33.33 ms budget at
+1080x1920 with three layers, 856 frames dropped over 60 s on the RTX 3070.
+
+1. **A playback entry point that is not `Compositor::composite()` (D13).** That
+   API takes CPU pixels and returns CPU pixels synchronously -- about 33 MB
+   across PCIe per frame with no overlap. A scaling experiment showed cost
+   tracks pixels rather than dispatches: a fixed ~33 ms for readback and stall,
+   plus ~5 ms per layer upload. Caching per-frame resources recovered only 4 ms,
+   so this is not a tuning problem. Needs GPU-resident frames, presentation
+   without readback, and frames in flight. The existing API stays as the export
+   and golden-frame path, where its shape is correct.
+2. **Present to the Program monitor** (swapchain) -- first code needing a window.
+3. **Hardware-accelerated decode.** Still on the critical path: CPU decode
+   manages ~66 fps on 4K and three layers at 30 fps needs 90. Also what D9 needs.
 
 ---
 
@@ -42,7 +50,7 @@ Nothing here is in the repo, and a new session will not discover it by itself.
 | Qt 6.10.3 | `A:\Qt\6.10.3\msvc2022_64` (set `QT_ROOT`) |
 | Toolchain | VS 2022 Build Tools, MSVC 19.44, bundled CMake 3.31.6 + Ninja 1.12.1 |
 | GPU | RTX 3070, Vulkan 1.4.341. **Reference machine for all perf numbers.** |
-| 10-min 4K test source | `A:\rf-large-media\` (2.9 GB, not in git — regenerate per `tests/fixtures/media/README.md`) |
+| 10-min 4K test source | `A:\rf-large-media\` (2.9 GB, not in git â€” regenerate per `tests/fixtures/media/README.md`) |
 | `gh` CLI | Installed and authenticated as `wdajon`. Used to read CI results. |
 
 ### Building
@@ -81,7 +89,7 @@ machine and record the numbers in `docs/PROGRESS.md`.
 .\build\windows-debug\bin\rf_gpu_info.exe
 ```
 
-CI's Linux jobs run Vulkan against Mesa's **lavapipe** — a real software Vulkan
+CI's Linux jobs run Vulkan against Mesa's **lavapipe** â€” a real software Vulkan
 implementation, ~100x slower than hardware. It proves correctness and can never
 prove a frame-rate gate.
 
@@ -97,16 +105,16 @@ prove a frame-rate gate.
 
 Full detail in `docs/BACKLOG.md`. The ones that shape upcoming work:
 
-- **D9** — random 4K seek is p99 355 ms against a 150 ms budget. Fixed 5.8x
+- **D9** â€” random 4K seek is p99 355 ms against a 150 ms budget. Fixed 5.8x
   already (threading, and not copying discarded frames); the rest needs hardware
   decode. **M3 must not be called done while this is unmet**, because M3's own
   gate measures sustained playback, which can pass with slow seeks.
-- **D11** — the OpenGL 4.3 fallback the brief requires does not exist. Deferred
+- **D11** â€” the OpenGL 4.3 fallback the brief requires does not exist. Deferred
   deliberately (ADR 007); Vulkan includes are PRIVATE to `rf_gpu` so the
   extraction stays confined to one module.
-- **D8** — every decoded frame is copied out of libav. Correct and portable, and
+- **D8** â€” every decoded frame is copied out of libav. Correct and portable, and
   too slow for the M3 playback budget. Needs a zero-copy path to the GPU.
-- **D10** — TSan cannot see libav's internal threading, so decoder threading is
+- **D10** â€” TSan cannot see libav's internal threading, so decoder threading is
   forced to one thread under TSan. The shipping multi-threaded decode path is
   therefore not TSan-covered.
 
@@ -122,8 +130,8 @@ These were arrived at the hard way and are visible throughout the codebase.
   because the build directory was already populated; only a clean build
   exercised it.
 - **A failure that looks deterministic is not, until it fails twice.** An
-  aqtinstall extraction failure looked like a path bug — with a real path bug
-  visible in the log — and was actually flaky.
+  aqtinstall extraction failure looked like a path bug â€” with a real path bug
+  visible in the log â€” and was actually flaky.
 - **Prefer a counter to a stopwatch for performance regressions.** `SeekCost`
   asserts a seek copies exactly one frame; it is deterministic and immune to CI
   timing noise, and it was verified by reintroducing the bug and watching all
@@ -132,5 +140,5 @@ These were arrived at the hard way and are visible throughout the codebase.
   a test; ownership changed so it cannot happen, rather than the test being
   corrected.
 - **State what a test does not prove.** Fixture READMEs and ADRs say plainly
-  where coverage stops — synthetic media has no VFR or broken timestamps,
+  where coverage stops â€” synthetic media has no VFR or broken timestamps,
   lavapipe says nothing about frame rate.
