@@ -9,6 +9,8 @@
 
 #include <volk.h>
 
+#include "instance_impl.hpp"
+
 namespace rf::gpu {
 namespace {
 
@@ -85,27 +87,11 @@ bool initialise_volk() {
 
 }  // namespace
 
-class Instance::Impl {
-public:
-    VkInstance instance = VK_NULL_HANDLE;
-    bool validation = false;
-
-    ~Impl() {
-        if (instance != VK_NULL_HANDLE) {
-            vkDestroyInstance(instance, nullptr);
-        }
-    }
-
-    Impl() = default;
-    Impl(const Impl&) = delete;
-    Impl& operator=(const Impl&) = delete;
-};
-
 bool vulkan_available() noexcept {
     return initialise_volk();
 }
 
-Instance::Instance(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+Instance::Instance(std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 Instance::Instance(Instance&&) noexcept = default;
 Instance& Instance::operator=(Instance&&) noexcept = default;
 Instance::~Instance() = default;
@@ -138,7 +124,7 @@ Result<Instance> Instance::create(const Options& options) {
     create.enabledLayerCount = static_cast<std::uint32_t>(layers.size());
     create.ppEnabledLayerNames = layers.empty() ? nullptr : layers.data();
 
-    auto impl = std::make_unique<Impl>();
+    auto impl = std::make_shared<Impl>();
     const VkResult result = vkCreateInstance(&create, nullptr, &impl->instance);
     if (result != VK_SUCCESS) {
         return from_vulkan(result, "cannot create a Vulkan instance");

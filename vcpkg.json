@@ -19,7 +19,15 @@
       ]
     },
     "vulkan-headers",
-    "volk"
+    "volk",
+    {
+      "name": "glslang",
+      "host": true,
+      "default-features": false,
+      "features": [
+        "tools"
+      ]
+    }
   ],
   "overrides": [
     {
@@ -37,6 +45,10 @@
     {
       "name": "volk",
       "version": "1.4.357.0"
+    },
+    {
+      "name": "glslang",
+      "version": "16.4.0"
     }
   ]
 }

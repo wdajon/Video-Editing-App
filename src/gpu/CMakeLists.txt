@@ -8,15 +8,33 @@
 find_package(VulkanHeaders CONFIG REQUIRED)
 find_package(volk CONFIG REQUIRED)
 
+include(ReelForgeShaders)
+
 add_library(rf_gpu STATIC
+    device.cpp
     device_info.cpp
+    image.cpp
     instance.cpp
+    instance_impl.hpp
+    "${PROJECT_SOURCE_DIR}/include/rf/gpu/device.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/gpu/device_info.hpp"
+    "${PROJECT_SOURCE_DIR}/include/rf/gpu/image.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/gpu/instance.hpp")
 
 add_library(rf::gpu ALIAS rf_gpu)
 
+# Compiled to SPIR-V at build time and embedded, so a broken shader fails the
+# build rather than the user's first playback, and there is no load path to get
+# wrong at runtime.
+rf_add_shader(rf_gpu
+    SOURCE "${PROJECT_SOURCE_DIR}/shaders/fill_pattern.comp"
+    SYMBOL fill_pattern)
+
 target_include_directories(rf_gpu PUBLIC "${PROJECT_SOURCE_DIR}/include")
+
+# SYSTEM so libav-style third-party headers are exempt from the project warning
+# policy; ReelForge code is not.
+target_include_directories(rf_gpu SYSTEM PRIVATE ${Vulkan_INCLUDE_DIRS})
 
 target_link_libraries(rf_gpu
     PUBLIC rf::core

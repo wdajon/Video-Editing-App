@@ -3,6 +3,7 @@
 #ifndef RF_GPU_INSTANCE_HPP
 #define RF_GPU_INSTANCE_HPP
 
+#include <cstddef>
 #include <memory>
 #include <string_view>
 #include <vector>
@@ -54,8 +55,20 @@ public:
 
 private:
     class Impl;
-    explicit Instance(std::unique_ptr<Impl> impl) noexcept;
-    std::unique_ptr<Impl> impl_;
+    explicit Instance(std::shared_ptr<Impl> impl) noexcept;
+
+    // Shared, not unique. A VkDevice must not outlive the VkInstance it was
+    // created from, and an API where that is merely documented is an API where
+    // it happens: destroying an Instance while a Device from it was still alive
+    // produced a hard crash the first time a test did exactly that. Device holds
+    // a copy of this pointer, so the instance survives as long as any device
+    // made from it.
+    std::shared_ptr<Impl> impl_;
+
+    // Device needs the native instance handle. Granting it here rather than
+    // exposing an accessor keeps VkInstance out of this header entirely, which
+    // is the whole point of the pimpl (ADR 007).
+    friend class Device;
 };
 
 }  // namespace rf::gpu
