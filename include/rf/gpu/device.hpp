@@ -57,6 +57,8 @@ private:
     // queue and pool. Granting access here keeps every Vulkan handle out of
     // this header, which is the point of the pimpl (ADR 007).
     friend class Compositor;
+
+    friend class Texture;
 };
 
 }  // namespace rf::gpu

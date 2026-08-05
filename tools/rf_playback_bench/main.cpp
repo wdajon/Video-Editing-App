@@ -1,4 +1,4 @@
-// rf_playback_bench -- can the compositor sustain the frame rate the timeline asks for?
+﻿// rf_playback_bench -- can the compositor sustain the frame rate the timeline asks for?
 //
 // M3's gate is "1080x1920, 3 layers, sustained 30 fps, no dropped frames over
 // 60 s". This measures exactly that, against clock time rather than an average:
@@ -23,6 +23,7 @@
 #include "rf/gpu/compositor.hpp"
 #include "rf/gpu/device.hpp"
 #include "rf/gpu/instance.hpp"
+#include "rf/gpu/texture.hpp"
 #include "rf/media/rational.hpp"
 #include "rf/playback/clock.hpp"
 #include "rf/playback/frame_log.hpp"
@@ -126,11 +127,30 @@ int main(int argc, char** argv) {
     }
     std::fflush(stdout);
 
-    std::vector<rf::gpu::Layer> layers;
+    // Layers are uploaded once and stay on the device. That is the entire point
+    // of the playback path: a still layer never re-uploads, and a video layer
+    // uploads only when a new frame is decoded. Nothing is read back.
+    std::vector<rf::gpu::Texture> textures;
+    std::vector<rf::gpu::GpuLayer> layers;
+    textures.reserve(static_cast<std::size_t>(options.layers));
     layers.reserve(static_cast<std::size_t>(options.layers));
     for (int i = 0; i < options.layers; ++i) {
-        layers.push_back({make_layer(options.width, options.height, i),
-                          i == 0 ? 1.0F : 0.8F, true});
+        auto texture = rf::gpu::Texture::create_from(
+            device.value(), make_layer(options.width, options.height, i));
+        if (!texture) {
+            std::fprintf(stderr, "%s\n", texture.error().to_string().c_str());
+            return 1;
+        }
+        textures.push_back(std::move(texture).value());
+    }
+    for (int i = 0; i < options.layers; ++i) {
+        layers.push_back({&textures[static_cast<std::size_t>(i)], i == 0 ? 1.0F : 0.8F, true});
+    }
+
+    auto target = rf::gpu::Texture::create(device.value(), options.width, options.height);
+    if (!target) {
+        std::fprintf(stderr, "%s\n", target.error().to_string().c_str());
+        return 1;
     }
 
     auto clock = rf::playback::PlaybackClock::create(rf::media::Rational{options.fps, 1});
@@ -147,8 +167,7 @@ int main(int argc, char** argv) {
     // One composite before timing starts: the first submission on a fresh
     // pipeline pays for shader compilation in the driver and would otherwise
     // land in the measurement as a spike that is not representative.
-    if (auto warmup = compositor.value().composite(layers, options.width, options.height);
-        !warmup) {
+    if (auto warmup = compositor.value().composite_into(target.value(), layers); !warmup) {
         std::fprintf(stderr, "warm-up composite failed: %s\n", warmup.error().to_string().c_str());
         return 1;
     }
@@ -160,7 +179,7 @@ int main(int argc, char** argv) {
     }
 
     for (std::int64_t frame = 0; frame < total_frames; ++frame) {
-        auto composed = compositor.value().composite(layers, options.width, options.height);
+        auto composed = compositor.value().composite_into(target.value(), layers);
         if (!composed) {
             std::fprintf(stderr, "composite failed at frame %lld: %s\n",
                          static_cast<long long>(frame), composed.error().to_string().c_str());

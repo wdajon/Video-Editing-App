@@ -16,15 +16,18 @@ add_library(rf_gpu STATIC
     device_info.cpp
     image.cpp
     instance.cpp
+    texture.cpp
     device_impl.hpp
     instance_impl.hpp
+    texture_impl.hpp
     vulkan_util.cpp
     vulkan_util.hpp
     "${PROJECT_SOURCE_DIR}/include/rf/gpu/compositor.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/gpu/device.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/gpu/device_info.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/gpu/image.hpp"
-    "${PROJECT_SOURCE_DIR}/include/rf/gpu/instance.hpp")
+    "${PROJECT_SOURCE_DIR}/include/rf/gpu/instance.hpp"
+    "${PROJECT_SOURCE_DIR}/include/rf/gpu/texture.hpp")
 
 add_library(rf::gpu ALIAS rf_gpu)
 

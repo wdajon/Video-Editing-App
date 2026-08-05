@@ -11,10 +11,14 @@
 
 #include "device_impl.hpp"
 #include "rf/gpu/shaders/composite.hpp"
+#include "texture_impl.hpp"
 #include "vulkan_util.hpp"
 
 namespace rf::gpu {
 namespace {
+
+using detail::from_vulkan;
+using detail::image_barrier;
 
 struct CompositePush {
     std::uint32_t width;
@@ -23,189 +27,7 @@ struct CompositePush {
 };
 
 constexpr std::uint32_t kGroupSize = 8;
-
-/// Frame resources, created once per output size and then reused.
-///
-/// These used to be built and torn down inside every composite() call, which
-/// measured 54 ms per frame at 1080x1920 on an RTX 3070 -- a card that does the
-/// actual blending in about a millisecond. Allocating images, memory, views,
-/// descriptor pools, command buffers and fences per frame is exactly what the
-/// "zero allocations on the render thread" budget exists to forbid, and the
-/// measurement is what made it obvious.
-///
-/// Destroyed in reverse creation order.
-struct FrameResources {
-    VkDevice device = VK_NULL_HANDLE;
-    VkCommandPool owning_pool = VK_NULL_HANDLE;
-
-    VkImage destination = VK_NULL_HANDLE;
-    VkDeviceMemory destination_memory = VK_NULL_HANDLE;
-    VkImageView destination_view = VK_NULL_HANDLE;
-    VkImage source = VK_NULL_HANDLE;
-    VkDeviceMemory source_memory = VK_NULL_HANDLE;
-    VkImageView source_view = VK_NULL_HANDLE;
-    VkBuffer upload = VK_NULL_HANDLE;
-    VkDeviceMemory upload_memory = VK_NULL_HANDLE;
-    VkBuffer readback = VK_NULL_HANDLE;
-    VkDeviceMemory readback_memory = VK_NULL_HANDLE;
-    VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
-    VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
-    VkFence fence = VK_NULL_HANDLE;
-    VkCommandBuffer command_buffer = VK_NULL_HANDLE;
-
-    /// Kept mapped for the compositor's lifetime. Coherent host memory does not
-    /// need flushing, and mapping is not free -- doing it per frame was part of
-    /// the per-frame cost.
-    void* upload_mapping = nullptr;
-
-    FrameResources() = default;
-    FrameResources(const FrameResources&) = delete;
-    FrameResources& operator=(const FrameResources&) = delete;
-
-    ~FrameResources() { destroy(); }
-
-    void destroy() {
-        if (device == VK_NULL_HANDLE) {
-            return;
-        }
-        if (upload_mapping != nullptr && upload_memory != VK_NULL_HANDLE) {
-            vkUnmapMemory(device, upload_memory);
-            upload_mapping = nullptr;
-        }
-        if (command_buffer != VK_NULL_HANDLE && owning_pool != VK_NULL_HANDLE) {
-            vkFreeCommandBuffers(device, owning_pool, 1, &command_buffer);
-            command_buffer = VK_NULL_HANDLE;
-        }
-        if (fence != VK_NULL_HANDLE) { vkDestroyFence(device, fence, nullptr); fence = VK_NULL_HANDLE; }
-        if (descriptor_pool != VK_NULL_HANDLE) {
-            vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
-            descriptor_pool = VK_NULL_HANDLE;
-            descriptor_set = VK_NULL_HANDLE;
-        }
-        if (readback != VK_NULL_HANDLE) { vkDestroyBuffer(device, readback, nullptr); readback = VK_NULL_HANDLE; }
-        if (readback_memory != VK_NULL_HANDLE) { vkFreeMemory(device, readback_memory, nullptr); readback_memory = VK_NULL_HANDLE; }
-        if (upload != VK_NULL_HANDLE) { vkDestroyBuffer(device, upload, nullptr); upload = VK_NULL_HANDLE; }
-        if (upload_memory != VK_NULL_HANDLE) { vkFreeMemory(device, upload_memory, nullptr); upload_memory = VK_NULL_HANDLE; }
-        if (source_view != VK_NULL_HANDLE) { vkDestroyImageView(device, source_view, nullptr); source_view = VK_NULL_HANDLE; }
-        if (source != VK_NULL_HANDLE) { vkDestroyImage(device, source, nullptr); source = VK_NULL_HANDLE; }
-        if (source_memory != VK_NULL_HANDLE) { vkFreeMemory(device, source_memory, nullptr); source_memory = VK_NULL_HANDLE; }
-        if (destination_view != VK_NULL_HANDLE) { vkDestroyImageView(device, destination_view, nullptr); destination_view = VK_NULL_HANDLE; }
-        if (destination != VK_NULL_HANDLE) { vkDestroyImage(device, destination, nullptr); destination = VK_NULL_HANDLE; }
-        if (destination_memory != VK_NULL_HANDLE) { vkFreeMemory(device, destination_memory, nullptr); destination_memory = VK_NULL_HANDLE; }
-    }
-};
-
-[[nodiscard]] Result<void> create_storage_image(VkDevice device, VkPhysicalDevice physical,
-                                                std::uint32_t width, std::uint32_t height,
-                                                VkImageUsageFlags usage, VkImage& image,
-                                                VkDeviceMemory& memory, VkImageView& view) {
-    VkImageCreateInfo create{};
-    create.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    create.imageType = VK_IMAGE_TYPE_2D;
-    create.format = VK_FORMAT_R8G8B8A8_UNORM;
-    create.extent = {width, height, 1};
-    create.mipLevels = 1;
-    create.arrayLayers = 1;
-    create.samples = VK_SAMPLE_COUNT_1_BIT;
-    create.tiling = VK_IMAGE_TILING_OPTIMAL;
-    create.usage = usage;
-    create.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    create.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-    VkResult result = vkCreateImage(device, &create, nullptr, &image);
-    if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot create a composite image");
-    }
-
-    VkMemoryRequirements requirements{};
-    vkGetImageMemoryRequirements(device, image, &requirements);
-    Result<std::uint32_t> type = detail::find_memory_type(physical, requirements.memoryTypeBits,
-                                                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    if (!type) {
-        return type.error().with_context("composite image");
-    }
-
-    VkMemoryAllocateInfo allocate{};
-    allocate.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocate.allocationSize = requirements.size;
-    allocate.memoryTypeIndex = type.value();
-    result = vkAllocateMemory(device, &allocate, nullptr, &memory);
-    if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot allocate composite image memory");
-    }
-    result = vkBindImageMemory(device, image, memory, 0);
-    if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot bind composite image memory");
-    }
-
-    VkImageViewCreateInfo view_create{};
-    view_create.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    view_create.image = image;
-    view_create.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    view_create.format = VK_FORMAT_R8G8B8A8_UNORM;
-    view_create.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    result = vkCreateImageView(device, &view_create, nullptr, &view);
-    if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot create a composite image view");
-    }
-    return ok();
-}
-
-[[nodiscard]] Result<void> create_host_buffer(VkDevice device, VkPhysicalDevice physical,
-                                              VkDeviceSize size, VkBufferUsageFlags usage,
-                                              VkBuffer& buffer, VkDeviceMemory& memory) {
-    VkBufferCreateInfo create{};
-    create.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    create.size = size;
-    create.usage = usage;
-    create.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    VkResult result = vkCreateBuffer(device, &create, nullptr, &buffer);
-    if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot create a host buffer");
-    }
-
-    VkMemoryRequirements requirements{};
-    vkGetBufferMemoryRequirements(device, buffer, &requirements);
-    // HOST_COHERENT avoids explicit flush and invalidate around the mapping.
-    Result<std::uint32_t> type = detail::find_memory_type(
-        physical, requirements.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    if (!type) {
-        return type.error().with_context("host buffer");
-    }
-
-    VkMemoryAllocateInfo allocate{};
-    allocate.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocate.allocationSize = requirements.size;
-    allocate.memoryTypeIndex = type.value();
-    result = vkAllocateMemory(device, &allocate, nullptr, &memory);
-    if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot allocate host buffer memory");
-    }
-    result = vkBindBufferMemory(device, buffer, memory, 0);
-    if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot bind host buffer memory");
-    }
-    return ok();
-}
-
-void image_barrier(VkCommandBuffer commands, VkImage image, VkImageLayout from, VkImageLayout to,
-                   VkAccessFlags source_access, VkAccessFlags destination_access,
-                   VkPipelineStageFlags source_stage, VkPipelineStageFlags destination_stage) {
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.oldLayout = from;
-    barrier.newLayout = to;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = image;
-    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    barrier.srcAccessMask = source_access;
-    barrier.dstAccessMask = destination_access;
-    vkCmdPipelineBarrier(commands, source_stage, destination_stage, 0, 0, nullptr, 0, nullptr, 1,
-                         &barrier);
-}
+constexpr std::uint64_t kTimeoutNanoseconds = 30ULL * 1000 * 1000 * 1000;
 
 [[nodiscard]] std::uint8_t to_byte(float value) {
     const float clamped = std::clamp(value, 0.0F, 1.0F);
@@ -225,12 +47,22 @@ public:
     VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
     VkPipeline pipeline = VK_NULL_HANDLE;
 
-    /// Reused across frames; rebuilt only when the output size changes or more
-    /// layers arrive than the upload buffer was sized for.
-    FrameResources frame;
-    int cached_width = 0;
-    int cached_height = 0;
-    std::size_t cached_layers = 0;
+    VkCommandBuffer commands = VK_NULL_HANDLE;
+    VkFence fence = VK_NULL_HANDLE;
+
+    /// One descriptor set per layer: each dispatch binds a different source
+    /// image, and a set that a submitted command buffer still references cannot
+    /// be rewritten. Grown on demand, never shrunk -- a timeline's layer count
+    /// is stable in practice.
+    VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> sets;
+
+    /// Scratch textures backing the CPU-pixels-in, CPU-pixels-out path. Cached
+    /// so repeated calls at one size do not reallocate.
+    std::vector<Texture> staged_layers;
+    std::unique_ptr<Texture> staged_target;
+    int staged_width = 0;
+    int staged_height = 0;
 
     Impl() = default;
     Impl(const Impl&) = delete;
@@ -242,7 +74,19 @@ public:
         }
         VkDevice handle = device->device;
         vkDeviceWaitIdle(handle);
-        frame.destroy();
+
+        // Textures own device resources and must go before the pipeline objects
+        // and, ultimately, before the device itself.
+        staged_layers.clear();
+        staged_target.reset();
+
+        if (fence != VK_NULL_HANDLE) { vkDestroyFence(handle, fence, nullptr); }
+        if (commands != VK_NULL_HANDLE) {
+            vkFreeCommandBuffers(handle, device->command_pool, 1, &commands);
+        }
+        if (descriptor_pool != VK_NULL_HANDLE) {
+            vkDestroyDescriptorPool(handle, descriptor_pool, nullptr);
+        }
         if (pipeline != VK_NULL_HANDLE) { vkDestroyPipeline(handle, pipeline, nullptr); }
         if (pipeline_layout != VK_NULL_HANDLE) {
             vkDestroyPipelineLayout(handle, pipeline_layout, nullptr);
@@ -253,130 +97,80 @@ public:
         }
     }
 
-    /// Builds the frame resources if the requested shape differs from what is
-    /// cached. A no-op on every frame after the first at a given size, which is
-    /// the whole point.
-    [[nodiscard]] Result<void> ensure(int width, int height, std::size_t layer_count) {
-        if (cached_width == width && cached_height == height && layer_count <= cached_layers &&
-            frame.destination != VK_NULL_HANDLE) {
+    /// Grows the descriptor pool so there is one set per layer.
+    [[nodiscard]] Result<void> ensure_sets(std::size_t count) {
+        if (sets.size() >= count && descriptor_pool != VK_NULL_HANDLE) {
             return ok();
         }
-
         VkDevice handle = device->device;
-        VkPhysicalDevice physical = device->physical;
-
-        // Anything in flight must finish before its resources are freed.
         vkDeviceWaitIdle(handle);
-        frame.destroy();
 
-        frame.device = handle;
-        frame.owning_pool = device->command_pool;
-
-        const auto image_width = static_cast<std::uint32_t>(width);
-        const auto image_height = static_cast<std::uint32_t>(height);
-        const VkDeviceSize frame_bytes =
-            static_cast<VkDeviceSize>(width) * static_cast<VkDeviceSize>(height) * 4u;
-        const std::size_t capacity = std::max<std::size_t>(layer_count, 1);
-
-        if (Result<void> made = create_storage_image(
-                handle, physical, image_width, image_height,
-                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                    VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                frame.destination, frame.destination_memory, frame.destination_view);
-            !made) {
-            return made.error().with_context("destination");
-        }
-        if (Result<void> made = create_storage_image(
-                handle, physical, image_width, image_height,
-                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, frame.source,
-                frame.source_memory, frame.source_view);
-            !made) {
-            return made.error().with_context("source");
-        }
-        if (Result<void> made = create_host_buffer(
-                handle, physical, frame_bytes * static_cast<VkDeviceSize>(capacity),
-                VK_BUFFER_USAGE_TRANSFER_SRC_BIT, frame.upload, frame.upload_memory);
-            !made) {
-            return made.error().with_context("upload buffer");
-        }
-        if (Result<void> made = create_host_buffer(handle, physical, frame_bytes,
-                                                   VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                                   frame.readback, frame.readback_memory);
-            !made) {
-            return made.error().with_context("readback buffer");
+        if (descriptor_pool != VK_NULL_HANDLE) {
+            vkDestroyDescriptorPool(handle, descriptor_pool, nullptr);
+            descriptor_pool = VK_NULL_HANDLE;
+            sets.clear();
         }
 
-        VkResult result = vkMapMemory(handle, frame.upload_memory, 0, VK_WHOLE_SIZE, 0,
-                                      &frame.upload_mapping);
-        if (result != VK_SUCCESS) {
-            return detail::from_vulkan(result, "cannot map the upload buffer");
-        }
+        const auto capacity = static_cast<std::uint32_t>(std::max<std::size_t>(count, 1));
 
         VkDescriptorPoolSize pool_size{};
         pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        pool_size.descriptorCount = 2;
+        pool_size.descriptorCount = capacity * 2;
 
         VkDescriptorPoolCreateInfo pool_create{};
         pool_create.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pool_create.maxSets = 1;
+        pool_create.maxSets = capacity;
         pool_create.poolSizeCount = 1;
         pool_create.pPoolSizes = &pool_size;
-        result = vkCreateDescriptorPool(handle, &pool_create, nullptr, &frame.descriptor_pool);
+        VkResult result = vkCreateDescriptorPool(handle, &pool_create, nullptr, &descriptor_pool);
         if (result != VK_SUCCESS) {
-            return detail::from_vulkan(result, "cannot create the composite descriptor pool");
+            return from_vulkan(result, "cannot create the composite descriptor pool");
         }
 
-        VkDescriptorSetAllocateInfo set_allocate{};
-        set_allocate.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        set_allocate.descriptorPool = frame.descriptor_pool;
-        set_allocate.descriptorSetCount = 1;
-        set_allocate.pSetLayouts = &set_layout;
-        result = vkAllocateDescriptorSets(handle, &set_allocate, &frame.descriptor_set);
+        const std::vector<VkDescriptorSetLayout> layouts(capacity, set_layout);
+        VkDescriptorSetAllocateInfo allocate{};
+        allocate.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocate.descriptorPool = descriptor_pool;
+        allocate.descriptorSetCount = capacity;
+        allocate.pSetLayouts = layouts.data();
+
+        sets.resize(capacity);
+        result = vkAllocateDescriptorSets(handle, &allocate, sets.data());
         if (result != VK_SUCCESS) {
-            return detail::from_vulkan(result, "cannot allocate the composite descriptor set");
+            sets.clear();
+            return from_vulkan(result, "cannot allocate composite descriptor sets");
+        }
+        return ok();
+    }
+
+    /// Rebuilds the scratch textures used by the CPU-pixels path.
+    [[nodiscard]] Result<void> ensure_staging(Device& owner, int width, int height,
+                                              std::size_t count) {
+        if (staged_width == width && staged_height == height && staged_layers.size() >= count &&
+            staged_target) {
+            return ok();
         }
 
-        // The two images never change, only their contents, so the descriptor
-        // set is written once per size rather than once per frame.
-        VkDescriptorImageInfo destination_info{};
-        destination_info.imageView = frame.destination_view;
-        destination_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        VkDescriptorImageInfo source_info{};
-        source_info.imageView = frame.source_view;
-        source_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        staged_layers.clear();
+        staged_target.reset();
 
-        VkWriteDescriptorSet writes[2]{};
-        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[0].dstSet = frame.descriptor_set;
-        writes[0].dstBinding = 0;
-        writes[0].descriptorCount = 1;
-        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        writes[0].pImageInfo = &destination_info;
-        writes[1] = writes[0];
-        writes[1].dstBinding = 1;
-        writes[1].pImageInfo = &source_info;
-        vkUpdateDescriptorSets(handle, 2, writes, 0, nullptr);
+        Result<Texture> target = Texture::create(owner, width, height);
+        if (!target) {
+            return target.error().with_context("composite target");
+        }
+        staged_target = std::make_unique<Texture>(std::move(target).value());
 
-        VkCommandBufferAllocateInfo command_allocate{};
-        command_allocate.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        command_allocate.commandPool = device->command_pool;
-        command_allocate.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        command_allocate.commandBufferCount = 1;
-        result = vkAllocateCommandBuffers(handle, &command_allocate, &frame.command_buffer);
-        if (result != VK_SUCCESS) {
-            return detail::from_vulkan(result, "cannot allocate a command buffer");
+        staged_layers.reserve(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            Result<Texture> layer = Texture::create(owner, width, height);
+            if (!layer) {
+                return layer.error().with_context("composite layer " + std::to_string(i));
+            }
+            staged_layers.push_back(std::move(layer).value());
         }
 
-        VkFenceCreateInfo fence_create{};
-        fence_create.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        result = vkCreateFence(handle, &fence_create, nullptr, &frame.fence);
-        if (result != VK_SUCCESS) {
-            return detail::from_vulkan(result, "cannot create a fence");
-        }
-
-        cached_width = width;
-        cached_height = height;
-        cached_layers = capacity;
+        staged_width = width;
+        staged_height = height;
         return ok();
     }
 };
@@ -403,7 +197,7 @@ Result<Compositor> Compositor::create(Device& device) {
     VkResult result =
         vkCreateDescriptorSetLayout(handle, &layout_create, nullptr, &impl->set_layout);
     if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot create the composite descriptor layout");
+        return from_vulkan(result, "cannot create the composite descriptor layout");
     }
 
     VkShaderModuleCreateInfo shader_create{};
@@ -412,7 +206,7 @@ Result<Compositor> Compositor::create(Device& device) {
     shader_create.pCode = shaders::composite;
     result = vkCreateShaderModule(handle, &shader_create, nullptr, &impl->shader);
     if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot create the composite shader module");
+        return from_vulkan(result, "cannot create the composite shader module");
     }
 
     VkPushConstantRange push_range{};
@@ -425,10 +219,10 @@ Result<Compositor> Compositor::create(Device& device) {
     pipeline_layout_create.pSetLayouts = &impl->set_layout;
     pipeline_layout_create.pushConstantRangeCount = 1;
     pipeline_layout_create.pPushConstantRanges = &push_range;
-    result = vkCreatePipelineLayout(handle, &pipeline_layout_create, nullptr,
-                                    &impl->pipeline_layout);
+    result =
+        vkCreatePipelineLayout(handle, &pipeline_layout_create, nullptr, &impl->pipeline_layout);
     if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot create the composite pipeline layout");
+        return from_vulkan(result, "cannot create the composite pipeline layout");
     }
 
     VkComputePipelineCreateInfo pipeline_create{};
@@ -441,10 +235,167 @@ Result<Compositor> Compositor::create(Device& device) {
     result = vkCreateComputePipelines(handle, VK_NULL_HANDLE, 1, &pipeline_create, nullptr,
                                       &impl->pipeline);
     if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot create the composite pipeline");
+        return from_vulkan(result, "cannot create the composite pipeline");
+    }
+
+    VkCommandBufferAllocateInfo command_allocate{};
+    command_allocate.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    command_allocate.commandPool = impl->device->command_pool;
+    command_allocate.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    command_allocate.commandBufferCount = 1;
+    result = vkAllocateCommandBuffers(handle, &command_allocate, &impl->commands);
+    if (result != VK_SUCCESS) {
+        return from_vulkan(result, "cannot allocate a composite command buffer");
+    }
+
+    VkFenceCreateInfo fence_create{};
+    fence_create.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    result = vkCreateFence(handle, &fence_create, nullptr, &impl->fence);
+    if (result != VK_SUCCESS) {
+        return from_vulkan(result, "cannot create a composite fence");
     }
 
     return Compositor{std::move(impl)};
+}
+
+Result<void> Compositor::composite_into(Texture& target, const std::vector<GpuLayer>& layers) {
+    std::vector<const GpuLayer*> drawn;
+    drawn.reserve(layers.size());
+    for (std::size_t i = 0; i < layers.size(); ++i) {
+        const GpuLayer& layer = layers[i];
+        if (!layer.enabled) {
+            continue;
+        }
+        if (layer.source == nullptr) {
+            return Error{Errc::invalid_argument,
+                         "layer " + std::to_string(i) + " has no source texture"};
+        }
+        if (layer.source->width() != target.width() ||
+            layer.source->height() != target.height()) {
+            return Error{Errc::invalid_argument,
+                         "layer " + std::to_string(i) + " is " +
+                             std::to_string(layer.source->width()) + "x" +
+                             std::to_string(layer.source->height()) + ", target is " +
+                             std::to_string(target.width()) + "x" +
+                             std::to_string(target.height())};
+        }
+        drawn.push_back(&layer);
+    }
+
+    if (Result<void> ready = impl_->ensure_sets(drawn.size()); !ready) {
+        return ready.error();
+    }
+
+    VkDevice handle = impl_->device->device;
+    const auto image_width = static_cast<std::uint32_t>(target.width());
+    const auto image_height = static_cast<std::uint32_t>(target.height());
+
+    // Written before recording: a descriptor set referenced by a submitted
+    // command buffer must not be rewritten, which is why each layer gets its
+    // own set rather than one being updated between dispatches.
+    for (std::size_t i = 0; i < drawn.size(); ++i) {
+        VkDescriptorImageInfo destination_info{};
+        destination_info.imageView = target.impl_->view;
+        destination_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        VkDescriptorImageInfo source_info{};
+        source_info.imageView = drawn[i]->source->impl_->view;
+        source_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+        VkWriteDescriptorSet writes[2]{};
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = impl_->sets[i];
+        writes[0].dstBinding = 0;
+        writes[0].descriptorCount = 1;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[0].pImageInfo = &destination_info;
+        writes[1] = writes[0];
+        writes[1].dstBinding = 1;
+        writes[1].pImageInfo = &source_info;
+        vkUpdateDescriptorSets(handle, 2, writes, 0, nullptr);
+    }
+
+    VkResult result = vkResetCommandBuffer(impl_->commands, 0);
+    if (result != VK_SUCCESS) {
+        return from_vulkan(result, "cannot reset the composite command buffer");
+    }
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    result = vkBeginCommandBuffer(impl_->commands, &begin);
+    if (result != VK_SUCCESS) {
+        return from_vulkan(result, "cannot begin the composite command buffer");
+    }
+
+    // The backdrop is opaque black, cleared every frame so a timeline with
+    // nothing on it shows black rather than the previous frame.
+    const VkImageLayout target_from =
+        target.impl_->initialised ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+    image_barrier(impl_->commands, target.impl_->image, target_from,
+                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+    VkClearColorValue black{};
+    black.float32[3] = 1.0F;
+    VkImageSubresourceRange whole{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdClearColorImage(impl_->commands, target.impl_->image,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &whole);
+
+    image_barrier(impl_->commands, target.impl_->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                  VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+
+    vkCmdBindPipeline(impl_->commands, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->pipeline);
+
+    for (std::size_t i = 0; i < drawn.size(); ++i) {
+        vkCmdBindDescriptorSets(impl_->commands, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                impl_->pipeline_layout, 0, 1, &impl_->sets[i], 0, nullptr);
+
+        const CompositePush push{image_width, image_height, drawn[i]->opacity};
+        vkCmdPushConstants(impl_->commands, impl_->pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(push), &push);
+        vkCmdDispatch(impl_->commands, (image_width + kGroupSize - 1) / kGroupSize,
+                      (image_height + kGroupSize - 1) / kGroupSize, 1);
+
+        if (i + 1 < drawn.size()) {
+            // The next layer reads the destination this dispatch just wrote.
+            image_barrier(impl_->commands, target.impl_->image, VK_IMAGE_LAYOUT_GENERAL,
+                          VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_WRITE_BIT,
+                          VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        }
+    }
+
+    result = vkEndCommandBuffer(impl_->commands);
+    if (result != VK_SUCCESS) {
+        return from_vulkan(result, "cannot end the composite command buffer");
+    }
+
+    result = vkResetFences(handle, 1, &impl_->fence);
+    if (result != VK_SUCCESS) {
+        return from_vulkan(result, "cannot reset the composite fence");
+    }
+
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &impl_->commands;
+    result = vkQueueSubmit(impl_->device->queue, 1, &submit, impl_->fence);
+    if (result != VK_SUCCESS) {
+        return from_vulkan(result, "cannot submit the composite");
+    }
+
+    result = vkWaitForFences(handle, 1, &impl_->fence, VK_TRUE, kTimeoutNanoseconds);
+    if (result == VK_TIMEOUT) {
+        return Error{Errc::timeout, "the GPU did not finish the composite within 30 seconds"};
+    }
+    if (result != VK_SUCCESS) {
+        return from_vulkan(result, "waiting for the composite failed");
+    }
+
+    target.impl_->initialised = true;
+    return ok();
 }
 
 Result<ImageRgba8> Compositor::composite(const std::vector<Layer>& layers, int width, int height) {
@@ -473,152 +424,26 @@ Result<ImageRgba8> Compositor::composite(const std::vector<Layer>& layers, int w
         drawn.push_back(&layer);
     }
 
-    if (Result<void> ready = impl_->ensure(width, height, drawn.size()); !ready) {
+    // Device is reconstructed here purely to hand Texture::create an owner; the
+    // shared impl means this is a reference to the same device, not a new one.
+    Device owner{impl_->device};
+    if (Result<void> ready = impl_->ensure_staging(owner, width, height, drawn.size()); !ready) {
         return ready.error();
     }
 
-    const auto image_width = static_cast<std::uint32_t>(width);
-    const auto image_height = static_cast<std::uint32_t>(height);
-    const VkDeviceSize frame_bytes =
-        static_cast<VkDeviceSize>(width) * static_cast<VkDeviceSize>(height) * 4u;
-
-    VkDevice handle = impl_->device->device;
-    FrameResources& frame = impl_->frame;
-
-    auto* upload_bytes = static_cast<std::uint8_t*>(frame.upload_mapping);
+    std::vector<GpuLayer> gpu_layers;
+    gpu_layers.reserve(drawn.size());
     for (std::size_t i = 0; i < drawn.size(); ++i) {
-        std::memcpy(upload_bytes + i * static_cast<std::size_t>(frame_bytes),
-                    drawn[i]->source.pixels.data(), static_cast<std::size_t>(frame_bytes));
-    }
-
-    VkResult result = vkResetCommandBuffer(frame.command_buffer, 0);
-    if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot reset the command buffer");
-    }
-
-    VkCommandBufferBeginInfo begin{};
-    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    result = vkBeginCommandBuffer(frame.command_buffer, &begin);
-    if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot begin the command buffer");
-    }
-
-    // The backdrop is opaque black. A timeline with nothing on it shows black,
-    // not whatever the previous frame left behind, so this clear happens even
-    // when there is nothing to draw. The source layout is UNDEFINED here because
-    // its previous contents are never reused.
-    image_barrier(frame.command_buffer, frame.destination, VK_IMAGE_LAYOUT_UNDEFINED,
-                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
-                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-
-    VkClearColorValue black{};
-    black.float32[3] = 1.0F;
-    VkImageSubresourceRange whole{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdClearColorImage(frame.command_buffer, frame.destination,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &whole);
-
-    image_barrier(frame.command_buffer, frame.destination, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                  VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_TRANSFER_WRITE_BIT,
-                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-
-    image_barrier(frame.command_buffer, frame.source, VK_IMAGE_LAYOUT_UNDEFINED,
-                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
-                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-
-    vkCmdBindPipeline(frame.command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->pipeline);
-    vkCmdBindDescriptorSets(frame.command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            impl_->pipeline_layout, 0, 1, &frame.descriptor_set, 0, nullptr);
-
-    for (std::size_t i = 0; i < drawn.size(); ++i) {
-        VkBufferImageCopy copy{};
-        copy.bufferOffset = static_cast<VkDeviceSize>(i) * frame_bytes;
-        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        copy.imageExtent = {image_width, image_height, 1};
-        vkCmdCopyBufferToImage(frame.command_buffer, frame.upload, frame.source,
-                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-
-        image_barrier(frame.command_buffer, frame.source, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                      VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_TRANSFER_WRITE_BIT,
-                      VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-
-        const CompositePush push{image_width, image_height, drawn[i]->opacity};
-        vkCmdPushConstants(frame.command_buffer, impl_->pipeline_layout,
-                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-        vkCmdDispatch(frame.command_buffer, (image_width + kGroupSize - 1) / kGroupSize,
-                      (image_height + kGroupSize - 1) / kGroupSize, 1);
-
-        if (i + 1 < drawn.size()) {
-            // The next layer overwrites the source and reads the destination
-            // this dispatch just wrote, so both need ordering before it runs.
-            image_barrier(frame.command_buffer, frame.source, VK_IMAGE_LAYOUT_GENERAL,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_SHADER_READ_BIT,
-                          VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                          VK_PIPELINE_STAGE_TRANSFER_BIT);
-            image_barrier(frame.command_buffer, frame.destination, VK_IMAGE_LAYOUT_GENERAL,
-                          VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_WRITE_BIT,
-                          VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        if (Result<void> uploaded = impl_->staged_layers[i].upload(drawn[i]->source); !uploaded) {
+            return uploaded.error().with_context("layer " + std::to_string(i));
         }
+        gpu_layers.push_back({&impl_->staged_layers[i], drawn[i]->opacity, true});
     }
 
-    image_barrier(frame.command_buffer, frame.destination, VK_IMAGE_LAYOUT_GENERAL,
-                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT,
-                  VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                  VK_PIPELINE_STAGE_TRANSFER_BIT);
-
-    VkBufferImageCopy readback_copy{};
-    readback_copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    readback_copy.imageExtent = {image_width, image_height, 1};
-    vkCmdCopyImageToBuffer(frame.command_buffer, frame.destination,
-                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, frame.readback, 1,
-                           &readback_copy);
-
-    result = vkEndCommandBuffer(frame.command_buffer);
-    if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot end the command buffer");
+    if (Result<void> composed = composite_into(*impl_->staged_target, gpu_layers); !composed) {
+        return composed.error();
     }
-
-    result = vkResetFences(handle, 1, &frame.fence);
-    if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot reset the fence");
-    }
-
-    VkSubmitInfo submit{};
-    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submit.commandBufferCount = 1;
-    submit.pCommandBuffers = &frame.command_buffer;
-    result = vkQueueSubmit(impl_->device->queue, 1, &submit, frame.fence);
-    if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot submit the composite");
-    }
-
-    constexpr std::uint64_t kTimeoutNanoseconds = 30ULL * 1000 * 1000 * 1000;
-    result = vkWaitForFences(handle, 1, &frame.fence, VK_TRUE, kTimeoutNanoseconds);
-    if (result == VK_TIMEOUT) {
-        return Error{Errc::timeout, "the GPU did not finish the composite within 30 seconds"};
-    }
-    if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "waiting for the composite failed");
-    }
-
-    void* mapped = nullptr;
-    result = vkMapMemory(handle, frame.readback_memory, 0, frame_bytes, 0, &mapped);
-    if (result != VK_SUCCESS) {
-        return detail::from_vulkan(result, "cannot map the readback buffer");
-    }
-
-    ImageRgba8 image;
-    image.width = width;
-    image.height = height;
-    image.pixels.resize(static_cast<std::size_t>(frame_bytes));
-    std::memcpy(image.pixels.data(), mapped, static_cast<std::size_t>(frame_bytes));
-    vkUnmapMemory(handle, frame.readback_memory);
-
-    return image;
+    return impl_->staged_target->read_back();
 }
 
 ImageRgba8 composite_reference(const std::vector<Layer>& layers, int width, int height) {
@@ -646,9 +471,11 @@ ImageRgba8 composite_reference(const std::vector<Layer>& layers, int width, int 
             const float coverage =
                 (static_cast<float>(layer.source.pixels[pixel + 3]) / 255.0F) * layer.opacity;
             for (std::size_t channel = 0; channel < 3; ++channel) {
-                const float above = static_cast<float>(layer.source.pixels[pixel + channel]) / 255.0F;
+                const float above =
+                    static_cast<float>(layer.source.pixels[pixel + channel]) / 255.0F;
                 const float below = static_cast<float>(image.pixels[pixel + channel]) / 255.0F;
-                image.pixels[pixel + channel] = to_byte(above * coverage + below * (1.0F - coverage));
+                image.pixels[pixel + channel] =
+                    to_byte(above * coverage + below * (1.0F - coverage));
             }
             image.pixels[pixel + 3] = 255u;
         }
