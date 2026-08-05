@@ -1,10 +1,10 @@
-﻿# Progress
+# Progress
 
-## M3 â€” GPU compositor + Program monitor playback
+## M3 — GPU compositor + Program monitor playback
 
 **Exit gate:** 1080x1920, 3 layers, sustained 30 fps playback, no dropped frames
-over 60 s. **Gate status: NOT MET** â€” nothing composites layers yet, and no
-frame has been presented to a screen.
+over 60 s. **Gate status: NOT MET** — compositing has the throughput, but nothing
+has been presented to a screen and no paced playback loop exists.
 
 **Reference machine for every performance number in this milestone:** AMD Ryzen
 9 5900X (12 cores), NVIDIA GeForce RTX 3070 (8 GiB, Vulkan 1.4.341), Windows 11.
@@ -14,7 +14,7 @@ frame has been presented to a screen.
 CI runners have no GPU. Linux jobs install Mesa's **lavapipe**, a real Vulkan
 implementation running on the CPU, so API misuse, validation errors, wrong
 pixels and lifetime bugs are all caught on every commit. It is roughly two
-orders of magnitude slower than hardware â€” `Instance.CreatesAndEnumerates` takes
+orders of magnitude slower than hardware — `Instance.CreatesAndEnumerates` takes
 2.35 s there against milliseconds on the RTX 3070.
 
 **A green CI does not mean the M3 frame-rate gate is met, and never will.** That
@@ -22,7 +22,50 @@ number comes from the reference machine and is recorded with its hardware, the
 same arrangement as the M1 seek baseline. This is written down because it is
 exactly the kind of distinction that erodes quietly.
 
-### Iteration 5 â€” measured sustained composite, and why it fails
+### Iteration 6 — the playback path, and a 217x result
+
+D13 said the shape of the composite API was the problem, not the tuning. Acting
+on that rather than optimising further inside the old shape:
+
+```
+scene:   1080x1920, 3 layers, 30 fps for 60 s   (RTX 3070)
+produced 1800 frames in 0.4 s
+dropped:  0
+interval ms  p50 0.23  p99 0.42  max 1.61  (budget 33.33)
+```
+
+**p50 49.90 ms → 0.23 ms.** The same scene that took 88.5 seconds takes 0.4.
+That confirms the iteration 5 diagnosis exactly: the cost was transfers, never
+the blending.
+
+`Texture` holds an image on the device. `Compositor::composite_into()` takes
+GPU-resident layers and writes a GPU target — no upload, no readback. A still
+layer uploads once when created; a video layer will upload once per decoded
+frame; the result stays on the device for presentation.
+
+`composite()` is kept for export and golden frames and is now **implemented on
+top of `composite_into()`**, so the two paths cannot disagree about what a
+composite means, and the existing sixteen compositor tests exercise the new code.
+
+Each layer gets its own descriptor set. A set referenced by a submitted command
+buffer must not be rewritten, so updating one between dispatches would have been
+a race that validation catches on some drivers and not others.
+
+**What this does not prove.** The bench composites as fast as it can rather than
+pacing to the clock, so it never falls behind and its zero-drop result is close
+to trivial. What it establishes is capacity: 0.23 ms against a 33.33 ms budget,
+roughly 145x headroom. Paced playback with presentation is still untested, and
+the gate needs it.
+
+**A self-inflicted defect worth recording.** Editing these documents with
+PowerShell's `Get-Content -Raw` / `Set-Content -Encoding utf8` corrupted every
+em-dash: PowerShell 5.1 reads UTF-8 as ANSI by default, so the round trip
+double-encoded them, and it added a BOM. Repaired by reading and writing through
+`System.IO.File` with an explicit no-BOM UTF-8 encoding. Documentation and source
+files are edited with tools that preserve encoding, not with shell text
+substitution.
+
+### Iteration 5 — measured sustained composite, and why it fails
 
 **Gate shape measured on the reference machine (RTX 3070, RelWithDebInfo):**
 
@@ -75,7 +118,7 @@ The compositor is correct -- 265 tests, exact where the arithmetic is exact -- a
 it is kept as the export and golden-frame path. Playback needs a different entry
 point into the same pipeline, not a different compositor.
 
-### Iteration 3 â€” headless compute render, verified pixel-exact
+### Iteration 3 — headless compute render, verified pixel-exact
 
 The whole compute path end to end: logical device, memory type selection,
 storage image, descriptors, embedded SPIR-V, compute pipeline, layout barriers,
@@ -87,7 +130,7 @@ a full 1080x1920 frame.
 ```
 
 **A crash was the most useful result.** `Device.OpensThePreferredDevice` died
-with `0xc0000409` â€” a hard fault, not a failed assertion. The test helper let an
+with `0xc0000409` — a hard fault, not a failed assertion. The test helper let an
 `Instance` be destroyed while a `Device` created from it was still alive, which
 is undefined behaviour in Vulkan.
 
@@ -95,7 +138,7 @@ The fix went into the API, not the test. `Instance` now holds its implementation
 in a `shared_ptr` and `Device` keeps a copy, so the instance outlives every
 device made from it. An API where that rule is only documented is an API where
 it gets violated, and the first test to touch the boundary proved it. The shared
-pointer is declared first in `Device::Impl` so it is destroyed last â€” members die
+pointer is declared first in `Device::Impl` so it is destroyed last — members die
 in reverse declaration order, and the `VkDevice` has to go first.
 
 **Two choices that keep the test able to fail:**
@@ -106,14 +149,14 @@ in reverse declaration order, and the `VkDevice` has to go first.
   mistakes produce a mismatch.
 - The expected image is written from the shader's specification on the CPU,
   never captured from a GPU run, so a wrong shader cannot quietly become the
-  expected answer. Comparison is exact equality â€” `float(v % 256) / 255.0` into
+  expected answer. Comparison is exact equality — `float(v % 256) / 255.0` into
   rgba8 unorm rounds back to `v % 256`.
 
 `61x37` against an 8x8 workgroup is tested specifically: dispatches round up, so
 the shader must bounds-check, and the edges must still be written rather than
 left as whatever the allocation happened to contain.
 
-### Iteration 2 â€” Vulkan device layer
+### Iteration 2 — Vulkan device layer
 
 Instance creation, device enumeration, capability reporting and selection, plus
 `rf_gpu_info` so a user reporting a rendering problem can say what they are
@@ -121,7 +164,7 @@ running without installing a Vulkan SDK.
 
 Vulkan is loaded dynamically through volk rather than linked against the SDK:
 vcpkg's `vulkan` port needs a `VULKAN_SDK` variable, which would make a clean
-clone fail on a machine without a manual install â€” the hidden prerequisite ADR
+clone fail on a machine without a manual install — the hidden prerequisite ADR
 001 exists to prevent. It also means a machine with no driver is a runtime
 condition the editor can report rather than a link error that stops it starting.
 
@@ -135,13 +178,13 @@ the binary: `rf_gpu` is where leak detection matters most, since every Vulkan
 object in the project is freed by hand there. `print_suppressions=1` stays on so
 a stale suppression becomes visible (D12).
 
-### Iteration 1 â€” the playback clock and frame accounting
+### Iteration 1 — the playback clock and frame accounting
 
 Built before any GPU code, for the same reason M1's time model came before the
 decoder: **the gate's claim is only as good as its definition.**
 
 Three ways "no dropped frames over 60 s" gets faked, all rejected explicitly in
-ADR 006 â€” averaging (1,800 frames in 60 s averages 30 fps and can stutter
+ADR 006 — averaging (1,800 frames in 60 s averages 30 fps and can stutter
 throughout), deriving position from a frame counter (which makes drops
 impossible by construction and the metric worthless), and floating-point time
 (which drifts off the frame grid exactly as M1 spent a milestone avoiding).
@@ -157,13 +200,13 @@ A drop is defined narrowly and each exclusion has a test: a late frame that is
 still the right frame is pacing, not a drop; a repeated frame while paused is
 not; frames jumped over by a seek were never due. Conflating them would report
 two different failures as one and send the fix in the wrong direction. The
-inverse test matters as much â€” a renderer managing only 15 fps must be reported
+inverse test matters as much — a renderer managing only 15 fps must be reported
 as dropping 899 frames, or the gate is decorative.
 
 **One real defect, caught by a round-trip test written for exactly this class:**
 `time_of_frame` rounded to nearest, which can land a nanosecond before the true
 boundary, and `frame_at` then floors to the previous frame. The correct rounding
-depends on direction of play â€” forward wants the earliest instant at or after
+depends on direction of play — forward wants the earliest instant at or after
 the boundary, reverse the latest at or before.
 
 ### Remaining for M3
@@ -175,7 +218,7 @@ the boundary, reverse the latest at or before.
 4. Hardware-accelerated decode, without which D9's 150 ms seek budget stays
    unmet and playback of 4K source cannot feed the compositor.
 
-## M2 â€” Timeline data model + undo/redo command stack
+## M2 — Timeline data model + undo/redo command stack
 
 **Exit gate:** 10,000-op fuzz on the command stack; undo returns to a
 byte-identical state. **Gate status: PASSED.**
@@ -196,7 +239,7 @@ against the document's actual current contents. The counter is asserted: the tes
 fails if fewer than half the attempts apply.
 
 **Why the gate is checked three ways.** Byte equality alone would keep passing if
-the serialiser omitted a field â€” both sides would omit it identically while undo
+the serialiser omitted a field — both sides would omit it identically while undo
 silently lost it forever. Structural equality alone would miss clip ordering and
 id-counter drift, which serialise differently but compare equal member by member.
 Neither check subsumes the other.
@@ -205,7 +248,7 @@ Neither check subsumes the other.
 
 - **Ids are returned on undo.** A command that spends an id restores the counter
   when reverted. Without it every visible object matches and the bytes still
-  differ â€” which is exactly the failure byte-comparison exists to catch.
+  differ — which is exactly the failure byte-comparison exists to catch.
 - **Redo reuses the id it originally issued.** A redo that mints a fresh id
   produces a document that looks correct and is not the one the user undid.
   `CreatingCommand` holds both rules so no individual command can forget one.
@@ -220,18 +263,18 @@ Neither check subsumes the other.
 The one failure during this milestone was **a defect in a test, not in the
 code**: `DeepHistoryUndoesInReverseOrder` undid the whole stack while comparing
 against a snapshot taken after a track was added. The implementation had
-correctly returned the document to pristine â€” id counter back to 1 â€” and the
+correctly returned the document to pristine — id counter back to 1 — and the
 expectation was simply wrong. Corrected to undo only the 50 clip additions, then
 assert the pristine state explicitly.
 
 A `SetFlagCommand` template over a pointer-to-member was written and then
 replaced with three plain classes before it ever compiled. It required explicit
 specialisations, which is precisely the corner where MSVC and Clang disagree, and
-it saved fewer lines than it risked â€” a lesson taken from the `<algorithm>`
+it saved fewer lines than it risked — a lesson taken from the `<algorithm>`
 failure earlier the same day.
 
 
-## M1 â€” Media engine: probe, decode, frame-accurate seek
+## M1 — Media engine: probe, decode, frame-accurate seek
 
 **Exit gate:** seek to any frame of a 10-minute 4K file; decoded hash matches a
 reference.
@@ -240,7 +283,7 @@ reference.
 
 Measured 2026-08-04 on the reference machine (AMD Ryzen 9 5900X, 12 cores;
 Windows 11; RelWithDebInfo; source on a local drive) against
-`testsrc2_3840x2160_30fps_600s.mp4` â€” 10 minutes, 3840x2160, 30/1, GOP 250,
+`testsrc2_3840x2160_30fps_600s.mp4` — 10 minutes, 3840x2160, 30/1, GOP 250,
 18,000 frames, 2.9 GB, generated per `tests/fixtures/media/README.md`:
 
 ```
@@ -252,7 +295,7 @@ budget:   FAIL
 ```
 
 200 random seeks, zero mismatches, against a linear-decode reference in which
-all 18,000 hashes are distinct â€” so the comparison cannot pass vacuously. That
+all 18,000 hashes are distinct — so the comparison cannot pass vacuously. That
 is the exit gate as written, and it is met.
 
 The 150 ms random-seek budget from the performance section is **not** met.
@@ -262,7 +305,7 @@ The 150 ms random-seek budget from the performance section is **not** met.
 | Change | mean | p99 | Notes |
 |---|---|---|---|
 | As first measured | 1133 ms | 2534 ms | Single-threaded decode; every discarded frame copied |
-| + decoder threading | 519 ms | 1119 ms | `thread_count = 0` was never set â€” a defect, not a tuning knob |
+| + decoder threading | 519 ms | 1119 ms | `thread_count = 0` was never set — a defect, not a tuning knob |
 | + no copy of discarded frames | **194 ms** | **355 ms** | Seek scan reads timestamps off the `AVFrame` and unrefs |
 
 5.8x faster overall, and still 2.4x over budget. The remainder is not reachable
@@ -283,17 +326,17 @@ checks now stand behind these results:
 
 - **`SeekCost` tests** assert that a seek materialises exactly **one** frame,
   counting copies rather than milliseconds. Deterministic, resolution-independent,
-  and immune to CI timing noise â€” this is what actually catches the copy
+  and immune to CI timing noise — this is what actually catches the copy
   regression coming back.
 - **CI runs `rf_seek_check`** on the committed fixtures on every optimised build,
   proving accuracy on each commit. It cannot prove the 4K budget: the fixtures
   are 320x240 and the real source is 2.9 GB. That limitation is stated rather
   than papered over.
 
-### Iteration 3 â€” sequential decode and frame hashing
+### Iteration 3 — sequential decode and frame hashing
 
 **Increment:** walk a file's video stream frame by frame, and hash frames
-reproducibly. Linear decode is not just a feature â€” it is the **oracle** the
+reproducibly. Linear decode is not just a feature — it is the **oracle** the
 next increment's seek accuracy is measured against.
 
 **Falsifiable check:** a 60-frame fixture yields exactly 60 frames; NTSC frame
@@ -336,7 +379,7 @@ app = 10 tests    core = 48 tests    media = 72 tests
 Frames` establish that the hash actually separates frames. Without them, a seek
 test comparing hashes could pass while proving nothing at all.
 
-### Iteration 2 â€” probe
+### Iteration 2 — probe
 
 **Increment:** open a container, describe its streams, close it. No decoding, no
 seeking. The first code in the project that links libav.
@@ -386,17 +429,17 @@ tool, and a decoder cannot be its own oracle. The gate needs real footage or a
 reference hash from an independent decoder. Until it has one, the gate is not
 met and will not be claimed as met.
 
-### Iteration 1 â€” exact rational time arithmetic
+### Iteration 1 — exact rational time arithmetic
 
 **Increment:** the timestamp representation, before any libav code. Frame
 accuracy is decided by the number type, not by the decoder: 1001/30000 is not
 representable in binary floating point, so a float pipeline accumulates error
-and lands a cut a frame off after a few thousand frames. That is the Â±1 drift
+and lands a cut a frame off after a few thousand frames. That is the ±1 drift
 the rubric forbids, and no amount of care downstream fixes a representation that
 permits it.
 
 **Falsifiable check:** every frame of a 10-minute 29.97 fps timeline converts to
-a 1/90000 tick base and back to exactly the frame it started on â€” all 17,982 of
+a 1/90000 tick base and back to exactly the frame it started on — all 17,982 of
 them, not a sample.
 
 **Verified (2026-08-04, MSVC 19.44.35228, Debug):**
@@ -417,12 +460,12 @@ app = 10 tests    core = 48 tests    media = 42 tests
 - Ordering cross-multiplies at 128-bit width. In int64 it silently gives the
   wrong answer for large values; in floating point it gives the wrong answer for
   near-equal ones.
-- `mul_div` and `rescale` carry a full 64x64â†’128 intermediate, hand-written from
+- `mul_div` and `rescale` carry a full 64x64→128 intermediate, hand-written from
   32-bit limbs rather than `_umul128` or `unsigned __int128`. One implementation
   to reason about and test on every target beats a platform split in the code
   every timestamp flows through, and this runs at frame rate, not pixel rate.
 - Overflow is always an error value, never a wrap. A wrapped timestamp is a seek
-  to the wrong frame that reports success â€” the exact failure mode the rubric's
+  to the wrong frame that reports success — the exact failure mode the rubric's
   "silently swallow an error" question is asking about.
 - `approximate()` is deliberately not called `to_double`, and is not an implicit
   conversion, so using a float inside timing logic is visible at the call site.
@@ -450,10 +493,10 @@ a configure runs.
 
 
 
-## M0 â€” Repo, CMake, dep manifest, CI, empty Qt shell
+## M0 — Repo, CMake, dep manifest, CI, empty Qt shell
 
-**Exit gate:** clean clone â†’ build â†’ run on 2 OSes; CI green.
-**Gate status: PASSED** â€” 2026-08-04, run
+**Exit gate:** clean clone → build → run on 2 OSes; CI green.
+**Gate status: PASSED** — 2026-08-04, run
 [30891518538](https://github.com/wdajon/Video-Editing-App/actions/runs/30891518538)
 at `6a93924`, attempt 1, all six jobs green from a clean checkout:
 
@@ -466,11 +509,11 @@ at `6a93924`, attempt 1, all six jobs green from a clean checkout:
 | Linux ASan+UBSan | success | 1.6 min |
 | Linux TSan | success | 1.7 min |
 
-Every job runs configure â†’ build â†’ `ctest` â†’ both binaries executed, the GUI
+Every job runs configure → build → `ctest` → both binaries executed, the GUI
 shell under the offscreen platform so a green run means it initialises rather
 than merely links.
 
-### Iteration 1 â€” build system and core error handling
+### Iteration 1 — build system and core error handling
 
 **Increment:** a buildable, tested C++20 skeleton with the error-handling
 foundation every later module returns through, plus the dependency manifest and
@@ -478,16 +521,16 @@ warning/sanitizer policy. Deliberately excludes Qt: acquiring Qt is a separate
 decision (ADR 001) and bundling it into this iteration would have meant reporting
 "the build works" without ever having run it.
 
-**Falsifiable check:** configure â†’ build at `/W4 /WX` with zero warnings â†’ 48
-GoogleTest cases pass in both Debug and RelWithDebInfo â†’ the smoke binary runs
+**Falsifiable check:** configure → build at `/W4 /WX` with zero warnings → 48
+GoogleTest cases pass in both Debug and RelWithDebInfo → the smoke binary runs
 and prints build identity.
 
 **Verified (2026-08-04, MSVC 19.44.35228, CMake 3.31.6, Ninja 1.12.1, vcpkg 2026-07-27):**
 
-- `cmake --build build/windows-debug --parallel` â€” 11 targets, zero warnings, zero errors
-- `ctest --preset windows-debug` â€” 48/48 passed, 0 failed, 0 skipped, 1.43 s
-- `ctest --preset windows-release` â€” 48/48 passed, 0 failed, 0 skipped, 1.03 s
-- `build/windows-release/bin/rf_version.exe` â€” runs, prints version/compiler/target
+- `cmake --build build/windows-debug --parallel` — 11 targets, zero warnings, zero errors
+- `ctest --preset windows-debug` — 48/48 passed, 0 failed, 0 skipped, 1.43 s
+- `ctest --preset windows-release` — 48/48 passed, 0 failed, 0 skipped, 1.03 s
+- `build/windows-release/bin/rf_version.exe` — runs, prints version/compiler/target
 
 **Scores:**
 
@@ -496,7 +539,7 @@ and prints build identity.
 | 1 | Correctness | 4 | 48 executed tests, including death tests for every misuse path of `Result`. Not 5: the code has never been compiled by GCC or Clang, and the non-MSVC warning set is materially stricter (`-Wconversion`, `-Wold-style-cast`, `-Wsign-conversion`). Portability is asserted, not demonstrated. |
 | 2 | Frame accuracy | n/a | No media path in this increment. |
 | 3 | Performance | n/a | No render path in this increment. No budget applies yet. |
-| 4 | Robustness | 4 | Failure is a value everywhere; misuse aborts loudly instead of returning a plausible default; `dev_env.ps1` fails with an actionable message on every missing prerequisite. Not 5: defect D1 â€” the embedded git revision can be stale. |
+| 4 | Robustness | 4 | Failure is a value everywhere; misuse aborts loudly instead of returning a plausible default; `dev_env.ps1` fails with an actionable message on every missing prerequisite. Not 5: defect D1 — the embedded git revision can be stale. |
 | 5 | UI fidelity | n/a | No UI in this increment. |
 | 6 | Architecture | 4 | `rf_core` has zero third-party dependencies and no knowledge of Qt, libav, or the GPU; everything is testable headlessly. Not 5: there is not yet enough structure for the layering rule to have been tested by anything. |
 | 7 | Spec integrity | 4 | `docs/SPECS.md` records every value with a dated primary source and resolves the three named disputes with stated reasoning. Not 5: the 4:5 feed section is `UNSPECIFIED`, and no preset file or schema exists yet to hold the values. |
@@ -509,45 +552,45 @@ and prints build identity.
 | Any `TODO`, stub, hardcoded path, or fake success? | **No.** No `TODO` markers; no hardcoded toolchain paths (`vswhere` discovery); `rf_version` does real work. |
 | Does any test assert only that a call did not crash? | **No.** Every test asserts a specific value, message, or abort message. |
 | Does any spec number appear in `.cpp`/`.h`? | **No.** No delivery specs are implemented yet; `docs/SPECS.md` holds them and `presets/` does not exist. |
-| Does this increment leak, race, or allocate on the render thread? | **No render thread exists yet.** Unverified by tooling: ASan/TSan presets are defined but have not been run â€” see D3. |
+| Does this increment leak, race, or allocate on the render thread? | **No render thread exists yet.** Unverified by tooling: ASan/TSan presets are defined but have not been run — see D3. |
 | Would a first-time Premiere user find this control where they expect it? | **n/a.** No UI. |
 
-### Iteration 2 â€” Qt application shell
+### Iteration 2 — Qt application shell
 
-**Increment:** the Qt 6 shell M0 asks for â€” a real window with a real menu bar
-and status bar â€” plus the acquisition path that makes Qt reproducible on a clean
+**Increment:** the Qt 6 shell M0 asks for — a real window with a real menu bar
+and status bar — plus the acquisition path that makes Qt reproducible on a clean
 machine and in CI. Deliberately no empty dock widgets standing in for the M4
 panels: a panel that docks but shows nothing is indistinguishable from a broken
 panel.
 
-**Falsifiable check:** clean configure finds Qt through `QT_ROOT` â†’ build at
-`/W4 /WX` with zero warnings â†’ 58 tests pass in Debug and RelWithDebInfo,
+**Falsifiable check:** clean configure finds Qt through `QT_ROOT` → build at
+`/W4 /WX` with zero warnings → 58 tests pass in Debug and RelWithDebInfo,
 including widget tests that construct a real `MainWindow` with no display server
-â†’ `reelforge.exe` starts, shows a titled window, and exits 0 on window close.
+→ `reelforge.exe` starts, shows a titled window, and exits 0 on window close.
 
 **Verified (2026-08-04, Qt 6.10.3, MSVC 19.44.35228):**
 
-- `cmake --build build/windows-debug --parallel` â€” 21 targets, zero warnings
-- `ctest --preset windows-debug` â€” 58/58 passed (48 core + 10 app), 2.03 s
-- `ctest --preset windows-release` â€” 58/58 passed, 3.66 s
-- `reelforge.exe` â€” ran 4 s, window title `ReelForge`, 54.3 MB working set,
+- `cmake --build build/windows-debug --parallel` — 21 targets, zero warnings
+- `ctest --preset windows-debug` — 58/58 passed (48 core + 10 app), 2.03 s
+- `ctest --preset windows-release` — 58/58 passed, 3.66 s
+- `reelforge.exe` — ran 4 s, window title `ReelForge`, 54.3 MB working set,
   **0% CPU while idle** (budget: < 2%), closed cleanly with exit code 0
 
 **Scores:**
 
 | # | Rubric item | Score | Justification |
 |---|---|---|---|
-| 1 | Correctness | 4 | 58 executed tests; widget behaviour is asserted, not assumed. Still no GCC/Clang compile â€” unchanged from iteration 1. |
+| 1 | Correctness | 4 | 58 executed tests; widget behaviour is asserted, not assumed. Still no GCC/Clang compile — unchanged from iteration 1. |
 | 2 | Frame accuracy | n/a | No media path. |
-| 3 | Performance | 5 | The only budget applicable to this increment â€” idle CPU < 2% â€” is met at 0%, measured over 3 s. |
+| 3 | Performance | 5 | The only budget applicable to this increment — idle CPU < 2% — is met at 0%, measured over 3 s. |
 | 4 | Robustness | 4 | Every failure path in the Qt plumbing produces an actionable message (missing Qt names `scripts/install_qt.ps1`; missing `windeployqt` and missing offscreen plugin each fail configuration rather than producing a binary that cannot start). Unchanged defect D1. |
-| 5 | UI fidelity | 3 | Title bar follows Premiere's `App - path *` convention and Quit has a keyboard shortcut. That is the whole of the UI. There is no panel, no docking, no workspace, no JKL â€” all M4. Scored against what a Premiere user would expect to *find*, this is honestly a 3. |
+| 5 | UI fidelity | 3 | Title bar follows Premiere's `App - path *` convention and Quit has a keyboard shortcut. That is the whole of the UI. There is no panel, no docking, no workspace, no JKL — all M4. Scored against what a Premiere user would expect to *find*, this is honestly a 3. |
 | 6 | Architecture | 5 | The layering rule now has something to test it: `rf_core` does not link Qt, `window_title.cpp` holds the title format with no Qt dependency and is unit-tested without one, and `rf_app` is the only target that knows Qt exists. |
 | 7 | Spec integrity | 4 | Unchanged from iteration 1; no new platform-derived numbers were introduced. |
 
-**Checklist:** no silent error swallowing Â· no TODOs or stubs (the window has no
-placeholder panels) Â· no test asserts merely "didn't crash" Â· no spec number in
-C++ Â· no render thread yet; ASan/TSan still unrun (D3) Â· a Premiere user would
+**Checklist:** no silent error swallowing · no TODOs or stubs (the window has no
+placeholder panels) · no test asserts merely "didn't crash" · no spec number in
+C++ · no render thread yet; ASan/TSan still unrun (D3) · a Premiere user would
 find File > Exit where they expect it and nothing else, because nothing else
 exists yet.
 
@@ -559,14 +602,14 @@ exists yet.
    binary aborted at startup with exit code 3 and no assertion output. Fixed by
    deploying `Qt6::QOffscreenIntegrationPlugin` explicitly. Had the test binary
    relied on a CTest environment property instead, discovery would have failed
-   the same way â€” noted in `tests/app/main.cpp`.
+   the same way — noted in `tests/app/main.cpp`.
 
-### Iteration 3 â€” first CI run against real Linux
+### Iteration 3 — first CI run against real Linux
 
 **Increment:** push to a remote and let the six-job matrix compile this code with
 a compiler other than MSVC for the first time.
 
-**Result â€” the prediction was wrong, in the good direction.** Iterations 1 and 2
+**Result — the prediction was wrong, in the good direction.** Iterations 1 and 2
 both recorded an expectation that Clang would reject code MSVC accepted, because
 `-Wconversion`, `-Wsign-conversion` and `-Wold-style-cast` had never run against
 it. All four Linux jobs passed on the first attempt, including the moc-generated
@@ -590,7 +633,7 @@ py7zr.exceptions.Bad7zFile: Specified path is bad:
 
 The first hypothesis was a path defect: the workflow built the install prefix by
 appending `/Qt` to a Windows `$GITHUB_WORKSPACE`, producing the mixed-separator
-`D:\a\Video-Editing-App\Video-Editing-App/Qt`. That hypothesis was **wrong** â€”
+`D:\a\Video-Editing-App\Video-Editing-App/Qt`. That hypothesis was **wrong** —
 the Windows Release job ran the identical step in the same workflow run and
 succeeded. The failure is intermittent extraction inside aqtinstall's bundled
 py7zr, not anything deterministic about our inputs.
@@ -599,7 +642,7 @@ Fixed by retrying the install up to three times, wiping the partially extracted
 tree first because it is not resumable, and failing loudly if `Qt6Config.cmake`
 is still absent afterwards. The same retry is applied to `scripts/install_qt.ps1`
 and `scripts/bootstrap_linux.sh` so all three acquisition paths behave alike. The
-mixed separator was tidied with `cygpath` as well â€” it was not the bug, but it
+mixed separator was tidied with `cygpath` as well — it was not the bug, but it
 was sloppy.
 
 **Method note:** the first fix was nearly applied on the strength of a plausible
@@ -607,7 +650,7 @@ reading of the log. Re-running the failed job first cost one command and showed
 the theory was wrong. A deterministic-looking failure is not deterministic until
 it has failed twice.
 
-### Iteration 3a â€” a race in the build system, found by CI after the gate passed
+### Iteration 3a — a race in the build system, found by CI after the gate passed
 
 The gate run at `6a93924` was green. The very next commit (`891d1d9`, an Actions
 version bump) turned Windows Debug red at the **Build** step:
@@ -627,7 +670,7 @@ to write the same DLLs. Deployment now happens once, on `reelforge`, and
 
 1. **Iteration 2's checklist answer was wrong.** The question "does this increment
    leak, race, or allocate on the render thread?" was answered "no render thread
-   exists yet". There was no render thread, but there *was* a race â€” in the build
+   exists yet". There was no render thread, but there *was* a race — in the build
    system, shipped in the same increment. The question deserved a wider reading
    than it got.
 2. **Local verification was invalid and looked fine.** Every local build reused a
@@ -647,7 +690,7 @@ to write the same DLLs. Deployment now happens once, on `reelforge`, and
 
 Local Linux verification was attempted first and abandoned on evidence: this
 machine's Ryzen 9 5900X reports `VirtualizationFirmwareEnabled: False`, so AMD-V
-is disabled in firmware and no hypervisor â€” WSL2 included â€” can start. CI runners
+is disabled in firmware and no hypervisor — WSL2 included — can start. CI runners
 are the substitute. `scripts/bootstrap_linux.sh` remains the local path for
 anyone whose firmware allows it.
 
@@ -659,5 +702,5 @@ milestone that first depends on it.
 
 ### Next action
 
-Begin M1 â€” media engine: probe, decode, frame-accurate seek. Exit gate: seek to
+Begin M1 — media engine: probe, decode, frame-accurate seek. Exit gate: seek to
 any frame of a 10-minute 4K file with the decoded hash matching a reference.
