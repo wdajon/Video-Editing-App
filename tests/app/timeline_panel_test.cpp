@@ -298,4 +298,72 @@ TEST(MainWindowWorkspaces, AKeyPressInTheWindowReachesTheDocument) {
     EXPECT_TRUE(window.is_modified()) << "an edit must mark the project modified";
 }
 
+// --- JKL, from the key to the playhead (ADR 014) ------------------------------
+
+TEST(ShuttleThroughTheWindow, LStartsTheClockAndTheDrawnPlayheadFollows) {
+    MainWindow window;
+    window.show();
+
+    QTest::keyClick(window.timeline_panel(), Qt::Key_L);
+    EXPECT_TRUE(window.transport().is_playing());
+    EXPECT_EQ(window.transport().rate(), (rf::media::Rational{1, 1}));
+
+    // Driven with an explicit instant rather than by waiting for the timer.
+    // It has to be *relative to the same monotonic clock the window used to
+    // anchor* -- Nanoseconds counts from an unspecified epoch, so an absolute
+    // two seconds lands long before the anchor and reads as a huge negative
+    // frame. Exactness lives in the Transport tests, which own their `now`
+    // entirely; this only has to prove the wiring carries.
+    const rf::playback::SteadyClock wall;
+    window.refresh_playhead(wall.now() + std::chrono::seconds{2});
+    EXPECT_GT(window.timeline_panel()->playhead_frame(), 0)
+        << "pressing L must move the playhead, not just a number in a state struct";
+}
+
+TEST(ShuttleThroughTheWindow, RepeatedLShuttlesFaster) {
+    MainWindow window;
+    QTest::keyClick(window.timeline_panel(), Qt::Key_L);
+    QTest::keyClick(window.timeline_panel(), Qt::Key_L);
+    QTest::keyClick(window.timeline_panel(), Qt::Key_L);
+    EXPECT_EQ(window.transport().rate(), (rf::media::Rational{4, 1}));
+}
+
+TEST(ShuttleThroughTheWindow, KStopsTheClock) {
+    MainWindow window;
+    QTest::keyClick(window.timeline_panel(), Qt::Key_L);
+    ASSERT_TRUE(window.transport().is_playing());
+
+    QTest::keyClick(window.timeline_panel(), Qt::Key_K);
+    EXPECT_FALSE(window.transport().is_playing())
+        << "K must stop the clock, not merely the shuttle's opinion of it";
+}
+
+TEST(ShuttleThroughTheWindow, JRunsBackwards) {
+    MainWindow window;
+    QTest::keyClick(window.timeline_panel(), Qt::Key_J);
+    EXPECT_EQ(window.transport().rate(), (rf::media::Rational{-1, 1}));
+}
+
+TEST(ShuttleThroughTheWindow, ShiftLIsHalfSpeed) {
+    MainWindow window;
+    QTest::keyClick(window.timeline_panel(), Qt::Key_L, Qt::ShiftModifier);
+    EXPECT_EQ(window.transport().rate(), (rf::media::Rational{1, 2}));
+}
+
+TEST(ShuttleThroughTheWindow, ShuttleKeysDoNotDisturbTheDocument) {
+    // J, K and L are transport, not edits. One of them creating an undo entry
+    // would make the history unusable.
+    MainWindow window;
+    const TrackId track = window.document().add_track(TrackKind::video, "V1").value();
+    ASSERT_TRUE(window.document()
+                    .add_clip(track, "a.mp4", 0, 0, 30 * kFrame, 90 * kFrame)
+                    .has_value());
+    const std::string before = serialise(window.document());
+
+    for (const auto key : {Qt::Key_L, Qt::Key_L, Qt::Key_J, Qt::Key_K}) {
+        QTest::keyClick(window.timeline_panel(), key);
+    }
+    EXPECT_EQ(serialise(window.document()), before);
+}
+
 }  // namespace

@@ -44,7 +44,7 @@ TEST(CommandMapTest, EveryDefaultChordParses) {
     // The default table is written as text, so a typo in it would otherwise be a
     // silently missing binding rather than a build failure.
     const CommandMap map = CommandMap::defaults();
-    EXPECT_EQ(map.size(), 17u) << map.serialise();
+    EXPECT_EQ(map.size(), 22u) << map.serialise();
 }
 
 TEST(CommandMapTest, EveryTrimActionIsReachableFromTheKeyboard) {
@@ -57,9 +57,20 @@ TEST(CommandMapTest, EveryTrimActionIsReachableFromTheKeyboard) {
           Action::trim_forward, Action::trim_backward_many, Action::trim_forward_many,
           Action::select_previous_clip, Action::select_next_clip, Action::select_previous_track,
           Action::select_next_track, Action::select_in_edge, Action::select_out_edge,
+          Action::shuttle_forward, Action::shuttle_backward, Action::shuttle_stop,
+          Action::shuttle_slow_forward, Action::shuttle_slow_backward,
           Action::undo, Action::redo}) {
         EXPECT_FALSE(map.chords_for(action).empty()) << to_string(action) << " has no key";
     }
+}
+
+TEST(CommandMapTest, JKLAreWhereEveryEditorPutsThem) {
+    const CommandMap map = CommandMap::defaults();
+    EXPECT_EQ(bound_to(map, "J"), Action::shuttle_backward);
+    EXPECT_EQ(bound_to(map, "K"), Action::shuttle_stop);
+    EXPECT_EQ(bound_to(map, "L"), Action::shuttle_forward);
+    EXPECT_EQ(bound_to(map, "Shift+J"), Action::shuttle_slow_backward);
+    EXPECT_EQ(bound_to(map, "Shift+L"), Action::shuttle_slow_forward);
 }
 
 TEST(ActionTest, EveryActionRoundTripsThroughItsName) {

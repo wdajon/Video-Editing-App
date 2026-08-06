@@ -4,6 +4,9 @@
 #include <QDockWidget>
 #include <QMenuBar>
 #include <QStatusBar>
+#include <QTimer>
+
+#include <memory>
 
 #include <string>
 #include <utility>
@@ -41,6 +44,15 @@ MainWindow::MainWindow(QWidget* parent)
     setObjectName("rf_main_window");
     resize(1600, 900);
 
+    auto transport = Transport::create(document_.frame_rate());
+    RF_CHECK_MSG(transport.has_value(), "the default document's frame rate must be playable");
+    transport_ = std::make_unique<Transport>(std::move(transport).value());
+
+    playhead_timer_ = new QTimer(this);
+    playhead_timer_->setInterval(1000 / 60);
+    connect(playhead_timer_, &QTimer::timeout, this,
+            [this] { refresh_playhead(wall_clock_.now()); });
+
     QMenu* file_menu = menuBar()->addMenu(tr("&File"));
     file_menu->setObjectName("rf_menu_file");
     QAction* quit_action = file_menu->addAction(tr("E&xit"));
@@ -75,6 +87,23 @@ MainWindow::MainWindow(QWidget* parent)
         modified_ = true;
         refresh_title();
     });
+    connect(timeline_panel_, &TimelinePanel::shuttle_changed, this, [this] {
+        const playback::Nanoseconds now = wall_clock_.now();
+        if (Result<void> applied = transport_->apply(edit_state_.shuttle, now); !applied) {
+            statusBar()->showMessage(QString::fromStdString(applied.error().message()));
+            return;
+        }
+        // Repaint at the sequence rate while shuttling, and stop the timer when
+        // the shuttle does: a timer running against a stopped clock would burn
+        // a core to draw the same playhead (the idle CPU budget is < 2%).
+        if (transport_->is_playing()) {
+            playhead_timer_->start();
+        } else {
+            playhead_timer_->stop();
+        }
+        refresh_playhead(now);
+    });
+
     connect(timeline_panel_, &TimelinePanel::status_message, this, [this](const QString& message) {
         if (message.isEmpty()) {
             statusBar()->clearMessage();
@@ -88,6 +117,19 @@ MainWindow::MainWindow(QWidget* parent)
     timeline_panel_->setFocus();
 
     refresh_title();
+}
+
+void MainWindow::refresh_playhead(playback::Nanoseconds now) {
+    const Result<std::int64_t> frame = transport_->frame_at(now);
+    if (!frame) {
+        // An absurd position rather than a normal outcome. Stopping is the only
+        // safe response: leaving the timer running would repeat the failure at
+        // the frame rate.
+        playhead_timer_->stop();
+        statusBar()->showMessage(QString::fromStdString(frame.error().message()));
+        return;
+    }
+    timeline_panel_->set_playhead_frame(frame.value());
 }
 
 void MainWindow::save_workspace(const QString& name) {

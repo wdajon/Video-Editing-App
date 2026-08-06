@@ -156,6 +156,12 @@ Result<void> Editor::perform(Action action) {
         case Action::select_in_edge:  state_.edge = Edge::in;  return ok();
         case Action::select_out_edge: state_.edge = Edge::out; return ok();
 
+        case Action::shuttle_forward:       state_.shuttle.forward();       return ok();
+        case Action::shuttle_backward:      state_.shuttle.backward();      return ok();
+        case Action::shuttle_stop:          state_.shuttle.stop();          return ok();
+        case Action::shuttle_slow_forward:  state_.shuttle.slow_forward();  return ok();
+        case Action::shuttle_slow_backward: state_.shuttle.slow_backward(); return ok();
+
         case Action::undo: return stack_.undo(document_);
         case Action::redo: return stack_.redo(document_);
     }

@@ -39,6 +39,13 @@ constexpr DefaultBinding kDefaults[] = {
     {"[", Action::select_in_edge},
     {"]", Action::select_out_edge},
 
+    // JKL, unchanged since flatbed editing and identical in every NLE.
+    {"L", Action::shuttle_forward},
+    {"J", Action::shuttle_backward},
+    {"K", Action::shuttle_stop},
+    {"Shift+L", Action::shuttle_slow_forward},
+    {"Shift+J", Action::shuttle_slow_backward},
+
     {"Ctrl+Z", Action::undo},
     {"Ctrl+Shift+Z", Action::redo},
 };

@@ -53,6 +53,12 @@ enum class Action : std::uint16_t {
     select_in_edge,
     select_out_edge,
 
+    shuttle_forward,       ///< L.
+    shuttle_backward,      ///< J.
+    shuttle_stop,          ///< K.
+    shuttle_slow_forward,  ///< Shift+L.
+    shuttle_slow_backward, ///< Shift+J.
+
     undo,
     redo,
 };
