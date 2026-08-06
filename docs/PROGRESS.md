@@ -3,8 +3,42 @@
 ## M3 — GPU compositor + Program monitor playback
 
 **Exit gate:** 1080x1920, 3 layers, sustained 30 fps playback, no dropped frames
-over 60 s. **Gate status: NOT MET** — compositing has the throughput, but nothing
-has been presented to a screen and no paced playback loop exists.
+over 60 s.
+
+**Gate status: MET** — 2026-08-05, on the reference machine.
+
+```
+reelforge --play reels_1080x1920_30fps_60s.mp4
+presented: 1800 frames
+dropped:   0
+interval p99: 36.67 ms
+exit=0
+```
+
+Decode, YUV to RGBA conversion, GPU upload, three-layer composite, paced by the
+display, presented in a window for a full minute.
+
+**Confirmed visually by the project owner**, who watched the run and reported
+the expected image: a vertical window playing colour bars with a red tint and a
+white wash, smooth throughout, closing on its own. That confirmation is part of
+the gate, not a formality — ADR 008 records that presentation has no automated
+oracle, so a machine reporting 1800 frames cannot distinguish a correct picture
+from a black one.
+
+### What the gate does not cover
+
+Recorded so the pass is not read as more than it is:
+
+1. **The source is `testsrc2`.** Cheap to decode. Real camera footage at the
+   same resolution carries far more entropy and will cost more.
+2. **4K is not covered.** D9 stands: CPU decode manages ~66 fps on 4K, and three
+   layers at 30 fps needs 90. Hardware decode is still the open item.
+3. **YUV to RGBA runs on the CPU** through swscale, per frame. It fits at
+   1080x1920; uploading the planes and doing the matrix in a shader is the
+   eventual answer.
+4. **One frame in flight.** The loop submits and waits. FIFO already paces it,
+   so there is headroom, but a heavier scene would want pipelining.
+5. **No OpenGL fallback** (D11), which the brief requires as a stack constraint.
 
 **Reference machine for every performance number in this milestone:** AMD Ryzen
 9 5900X (12 cores), NVIDIA GeForce RTX 3070 (8 GiB, Vulkan 1.4.341), Windows 11.

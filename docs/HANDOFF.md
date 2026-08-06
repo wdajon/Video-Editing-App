@@ -15,12 +15,28 @@ Repository: https://github.com/wdajon/Video-Editing-App (public)
 | M0 — repo, CMake, deps, CI, Qt shell | **Gate met.** Six-job CI matrix green. |
 | M1 — probe, decode, frame-accurate seek | **Gate met.** 200/200 random seeks correct on a 10-min 4K file. Performance budget **not** met — see D9. |
 | M2 — timeline model + undo/redo | **Gate met.** 10,000-operation fuzz, undo returns byte-identical. |
-| M3 — GPU compositor + playback | **Gate NOT met.** Compositing is correct and fast enough (p50 0.23 ms against a 33.33 ms budget). Missing: presentation to a screen, and a paced playback loop. |
-| M4 onward | Not started. |
+| M3 — GPU compositor + playback | **Gate met** 2026-08-05. 1800 frames presented, 0 dropped, p99 36.67 ms, confirmed visually by the project owner. See the caveats in `PROGRESS.md`. |
+| M4 — panels, docking, workspaces, JKL | **Not started.** This is where work resumes. |
+| M5 onward | Not started. |
 
 249 tests. Zero warnings at `/W4 /WX` and `-Wall -Wextra -Werror`.
 
-### What M3 still needs
+### Seeing it run
+
+```powershell
+.\build\windows-release\bin\reelforge.exe --play "A:\rf-large-media\reels_1080x1920_30fps_60s.mp4"
+```
+
+A vertical window plays colour bars with a red tint and a white wash over them,
+smooth for 60 seconds, then closes and prints frame statistics. Regenerate the
+source with the command in `tests/fixtures/media/README.md` if it is missing.
+
+**Presentation has no automated oracle** (ADR 008). CI proves the compositor's
+output against a CPU reference and that a headless machine still composites, but
+only a person can confirm frames reached the screen. Re-confirm visually after
+any change to the swapchain or the monitor.
+
+### What M3 delivered, and what it did not
 
 **Compositing throughput is solved (D13, closed).** `Compositor::composite_into()`
 takes GPU-resident `Texture` layers and writes a GPU `Texture` — no upload, no
@@ -33,20 +49,26 @@ transfers all along, never the blending.
 frames, and is implemented on top of `composite_into()` so the two cannot
 disagree.
 
-Three things remain:
+**Pacing and presentation are done.** `Pacer` waits until each frame is due and
+renders whatever the clock says is current; skipping to the current frame rather
+than the stale one is what keeps playback from drifting further behind on every
+slow frame. `Swapchain` blits the composited texture into an acquired image and
+presents under FIFO, so the display sets the pace.
 
-1. **A paced playback loop.** `rf_playback_bench` composites as fast as it can
-   rather than waiting until each frame is due, so it never falls behind and its
-   zero-drop result measures *capacity*, not paced playback. The gate's claim
-   needs a loop that actually paces, and `FrameLog` already defines what a drop
-   is (ADR 006).
-2. **Present to the Program monitor** (swapchain) — the first code needing a
-   window, and the point at which pacing should block on present rather than on
-   a clock.
-3. **Hardware-accelerated decode.** Still on the critical path: CPU decode
-   manages ~66 fps on 4K and three layers at 30 fps needs 90. Also what D9 needs.
+**What M3 did NOT deliver**, carried forward:
 
-Run the measurement with:
+1. **Hardware-accelerated decode (D9).** CPU decode manages ~66 fps on 4K and
+   three layers at 30 fps needs 90, so 4K playback and the 150 ms seek budget
+   both still fail. The single most valuable open item.
+2. **The OpenGL 4.3 fallback (D11)**, which the brief names as a stack
+   constraint. Deferred deliberately; Vulkan includes are PRIVATE to `rf_gpu` so
+   the extraction stays confined to one module.
+3. **YUV to RGBA on the GPU (D8-adjacent).** The conversion runs on the CPU per
+   frame. It fits at 1080x1920 and will not at 4K.
+4. **Frames in flight.** The loop submits and waits. FIFO already paces it, so
+   there is headroom, but a heavier scene would want pipelining.
+
+Run the throughput measurement with:
 
 ```powershell
 .\build\windows-release\bin\rf_playback_bench.exe --width 1080 --height 1920 --layers 3 --fps 30 --seconds 60
