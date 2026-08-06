@@ -68,7 +68,7 @@ void fill_track(Document& document, TrackId track, std::mt19937_64& random) {
 /// sync, and every sync-lock path in ADR 010 -- the range narrowing, the
 /// straddling refusal, the multi-track undo record -- goes unexercised.
 Document random_document(std::mt19937_64& random) {
-    Document document = Document::create(Rational{1, 90000}).value();
+    Document document = Document::create(Rational{1, 90000}, Rational{30, 1}).value();
     const int tracks = 2 + static_cast<int>(random() % 2);
     for (int i = 0; i < tracks; ++i) {
         const TrackKind kind = i == 0 ? TrackKind::video : TrackKind::audio;

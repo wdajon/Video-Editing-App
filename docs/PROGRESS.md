@@ -5,9 +5,10 @@
 **Exit gate:** the full trim set (ripple/roll/slip/slide) driven by keyboard
 only.
 
-**Gate status: not met.** The trim model is complete: the four operations, their
-limits, sync-locked tracks and linked audio. Nothing is bound to a key yet and
-there are no panels, which is the whole of what the gate asks for.
+**Gate status: not met.** The trim model is complete and every operation is
+reachable from a key chord through `rf_edit`, verified headless. What is missing
+is the window: nothing routes a real `QKeyEvent` into it, and there are no
+panels, no docking, no workspaces and no JKL (D21, D22).
 
 ### Iteration 1 — the trim set, and the media limit that makes it honest
 
@@ -156,11 +157,61 @@ purpose; without the counter it would have exercised none and said nothing.
 
 Format version 4 for `Clip::link`.
 
+### Iteration 4 — the command map, and trimming in frames
+
+**Increment:** `rf_edit` — key chords, a remappable command map, editor state
+(tool, selection, edge) and the actions that turn a keystroke into a trim.
+**Falsifiable check:** `keyboard_workflow_test.cpp` performs all four operations
+and undoes them through `Editor::press` with key chords looked up in the map.
+Nothing in it calls `make_trim` or names a tick count.
+
+**A prerequisite turned up while sizing the work: nobody trims by ticks.** A tick
+is 1/90000 s and Premiere's trim keys move whole frames, so a trim key has to
+convert frames to ticks — and the document had no frame rate. ADR 005 gave it a
+tick base, which is a resolution, not a rate. `Document::create()` now takes both
+and refuses a frame rate whose period is not a whole number of ticks, so a
+keyboard trim lands on a frame boundary by construction.
+
+That refusal has a real cost, recorded rather than hidden: **23.976 fps cannot be
+created at a 1/90000 base**, because 90000 × 1001 / 24000 is 3753.75. Rounding
+would put a fraction of a frame of drift into every edit, which is the class of
+error the integer tick model exists to prevent. Choosing a base that expresses
+every broadcast rate exactly is D20.
+
+The defaults were read from Adobe's documentation rather than remembered: `V`,
+`B`, `N`, `Y`, `U` for the tools, `Ctrl+Left/Right` for a one-frame trim,
+`Ctrl+Shift+Left/Right` for the large offset (5 frames, Premiere's default, and a
+preference here too). Two bindings differ from Premiere and both are stated in
+ADR 012 rather than smuggled: Premiere ships *Select Nearest Edit Point as Ripple
+In/Out* unassigned, so a keyboard-only user cannot choose an edge out of the box,
+which the gate requires — ReelForge puts them on `[` and `]`.
+
+```
+100% tests passed, 0 tests failed out of 403     (windows-debug)
+100% tests passed, 0 tests failed out of 403     (windows-release)
+
+edit = 41 tests (new), timeline = 130
+```
+
+**Two defects found by the critique, both fixed rather than noted.**
+`CommandMap::defaults()` skipped a default binding whose chord failed to parse,
+which would have shipped a build with a key that silently did nothing; it now
+fails the check loudly. And `EditState` carried a `playhead` that selection wrote
+and nothing read — state by appearance, decoration in fact. It is gone until the
+actions that need it (Premiere's Q and W) exist, which is the same stance taken
+against inventing a linked-selection API before it has a caller.
+
+**What this does not prove:** that a real key press in a real window reaches this
+code. `rf_edit` is deliberately Qt-free, which is what makes the workflow
+testable headless, but nothing yet routes a `QKeyEvent` into it. That plus
+panels, docking, workspaces and JKL is the rest of M4 (D21, D22).
+
 ### Next action
 
-The command map and JKL. The trim model is complete enough to bind keys to:
-ripple, roll, slip and slide all keep sync-locked tracks and linked audio in
-step. D18 (no out-of-sync indicator) remains open against the gate.
+The Qt layer: panels, docking, workspaces, real key events routed into
+`rf_edit`, and JKL. That is one iteration of budget left against four named
+features, so the gate is likely to need more than the five-iteration cap allows —
+said now rather than discovered at the cap.
 
 ## M3 — GPU compositor + Program monitor playback
 

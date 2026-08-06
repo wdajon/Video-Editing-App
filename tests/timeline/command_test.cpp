@@ -21,7 +21,7 @@ using rf::timeline::serialise;
 constexpr rf::timeline::Ticks kSourceTicks = 1'000'000;
 
 Document make_document() {
-    auto document = Document::create(Rational{1, 90000});
+    auto document = Document::create(Rational{1, 90000}, Rational{30, 1});
     EXPECT_TRUE(document.has_value());
     return std::move(document).value();
 }
@@ -249,8 +249,9 @@ TEST(Command, DeepHistoryUndoesInReverseOrder) {
     // And undoing that last one lands on a pristine document, id counter reset.
     ASSERT_TRUE(stack.undo(document).has_value());
     EXPECT_EQ(serialise(document),
-              "reelforge/4\n"
+              "reelforge/5\n"
               "timebase 1/90000\n"
+              "framerate 30/1\n"
               "nextid 1\n");
 }
 

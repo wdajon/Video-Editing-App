@@ -32,7 +32,10 @@ namespace rf::timeline {
 /// in the bytes changes them, and byte-identity is the whole undo gate.
 ///
 /// Version 4 added `link` to the clip record (ADR 011).
-inline constexpr int kProjectFormatVersion = 4;
+///
+/// Version 5 added the sequence frame rate (ADR 012). A tick base is a
+/// resolution, not a rate, and a keyboard trim of one frame needs the rate.
+inline constexpr int kProjectFormatVersion = 5;
 
 /// Serialises `document` canonically.
 ///
