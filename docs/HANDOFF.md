@@ -19,7 +19,20 @@ Repository: https://github.com/wdajon/Video-Editing-App (public)
 | M4 — panels, docking, workspaces, JKL | **Not started.** This is where work resumes. |
 | M5 onward | Not started. |
 
-249 tests. Zero warnings at `/W4 /WX` and `-Wall -Wextra -Werror`.
+Zero warnings at `/W4 /WX` and `-Wall -Wextra -Werror`.
+
+**Do not quote a test count from this file or from `PROGRESS.md`.** Both contain
+figures that were true when written — `PROGRESS.md` in particular quotes pasted
+output from each iteration, so its numbers are deliberately historical. A stale
+count in this file was read as current by a fresh session and reported back as
+fact. Get the number from the suite:
+
+```powershell
+ctest --preset windows-debug
+```
+
+At the close of M3 (2026-08-05) that was **283**: core 48, media 92, timeline 51,
+gpu 42, playback 40, app 10. Treat it as a dated snapshot, not a claim about now.
 
 ### Seeing it run
 
