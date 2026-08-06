@@ -2,8 +2,10 @@ set(CMAKE_AUTOMOC ON)
 
 add_library(rf_app STATIC
     main_window.cpp
+    program_monitor.cpp
     window_title.cpp
     "${PROJECT_SOURCE_DIR}/include/rf/app/main_window.hpp"
+    "${PROJECT_SOURCE_DIR}/include/rf/app/program_monitor.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/app/window_title.hpp")
 
 add_library(rf::app ALIAS rf_app)
@@ -13,9 +15,17 @@ target_include_directories(rf_app PUBLIC "${PROJECT_SOURCE_DIR}/include")
 target_link_libraries(rf_app
     PUBLIC
         rf::core
+        rf::gpu
+        rf::media
+        rf::playback
         Qt6::Widgets
     PRIVATE
         rf::warnings)
+
+# The Program monitor hands Qt's VkSurfaceKHR straight through to rf_gpu, so it
+# needs the Vulkan headers Qt's own API names. This is the documented exception
+# to ADR 007 -- the alternative is rf_gpu depending on Qt, which is worse.
+target_include_directories(rf_app SYSTEM PRIVATE ${Vulkan_INCLUDE_DIRS})
 
 add_executable(reelforge main.cpp)
 

@@ -1,5 +1,6 @@
 ﻿#include "rf/gpu/device.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -127,10 +128,36 @@ Result<Device> Device::create(const Instance& instance, std::size_t device_index
     queue_create.queueCount = 1;
     queue_create.pQueuePriorities = &priority;
 
+    // VK_KHR_swapchain is a DEVICE extension, and creating a swapchain without
+    // it leaves vkCreateSwapchainKHR as a null pointer -- which crashes at the
+    // call site with no diagnostic rather than failing. Enabled whenever the
+    // device offers it, so a headless device simply does not get it and
+    // Swapchain::create can say so.
+    std::uint32_t extension_count = 0;
+    vkEnumerateDeviceExtensionProperties(impl->physical, nullptr, &extension_count, nullptr);
+    std::vector<VkExtensionProperties> device_extensions(extension_count);
+    if (extension_count > 0) {
+        vkEnumerateDeviceExtensionProperties(impl->physical, nullptr, &extension_count,
+                                             device_extensions.data());
+    }
+
+    std::vector<const char*> enabled;
+    const bool has_swapchain =
+        std::any_of(device_extensions.begin(), device_extensions.end(),
+                    [](const VkExtensionProperties& e) {
+                        return std::strcmp(e.extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0;
+                    });
+    if (has_swapchain) {
+        enabled.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    }
+    impl->can_present = has_swapchain;
+
     VkDeviceCreateInfo device_create{};
     device_create.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     device_create.queueCreateInfoCount = 1;
     device_create.pQueueCreateInfos = &queue_create;
+    device_create.enabledExtensionCount = static_cast<std::uint32_t>(enabled.size());
+    device_create.ppEnabledExtensionNames = enabled.empty() ? nullptr : enabled.data();
 
     result = vkCreateDevice(impl->physical, &device_create, nullptr, &impl->device);
     if (result != VK_SUCCESS) {

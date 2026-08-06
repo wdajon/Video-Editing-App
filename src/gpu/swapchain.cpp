@@ -203,6 +203,13 @@ Result<Swapchain> Swapchain::create(Device& device, SurfaceHandle surface, int w
     impl->device = device.impl_;
     impl->surface = reinterpret_cast<VkSurfaceKHR>(surface);
 
+    if (!impl->device->can_present) {
+        // Without VK_KHR_swapchain the swapchain entry points are null, and
+        // calling one crashes the process instead of returning an error.
+        return Error{Errc::unsupported_format,
+                     "this device does not support VK_KHR_swapchain, so it cannot present"};
+    }
+
     VkBool32 supported = VK_FALSE;
     VkResult result = vkGetPhysicalDeviceSurfaceSupportKHR(
         impl->device->physical, impl->device->info.compute_queue_family, impl->surface,

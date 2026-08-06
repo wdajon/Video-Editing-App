@@ -187,6 +187,9 @@ Result<Instance> Instance::create(const Options& options) {
     }
     impl->validation = validation;
     impl->presentation = !extensions.empty();
+    for (const char* name : extensions) {
+        impl->extensions.emplace_back(name);
+    }
 
     // Loading instance-level entry points here means later calls go straight to
     // the driver rather than through the loader's dispatch trampoline.
@@ -201,6 +204,14 @@ bool Instance::validation_enabled() const noexcept {
 
 bool Instance::presentation_supported() const noexcept {
     return impl_->presentation;
+}
+
+const std::vector<std::string>& Instance::enabled_extensions() const noexcept {
+    return impl_->extensions;
+}
+
+std::uint64_t Instance::native_handle() const noexcept {
+    return reinterpret_cast<std::uint64_t>(impl_->instance);
 }
 
 Result<std::vector<DeviceInfo>> Instance::enumerate_devices() const {

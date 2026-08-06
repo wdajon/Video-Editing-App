@@ -30,6 +30,11 @@ public:
     VkCommandPool command_pool = VK_NULL_HANDLE;
     DeviceInfo info;
 
+    /// True when VK_KHR_swapchain was enabled on this device. Checked before
+    /// any swapchain call, because the alternative is dereferencing a null
+    /// function pointer.
+    bool can_present = false;
+
     Impl() = default;
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;

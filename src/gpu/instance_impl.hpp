@@ -18,6 +18,7 @@ public:
     VkInstance instance = VK_NULL_HANDLE;
     bool validation = false;
     bool presentation = false;
+    std::vector<std::string> extensions;
 
     Impl() = default;
     Impl(const Impl&) = delete;

@@ -4,7 +4,9 @@
 #define RF_GPU_INSTANCE_HPP
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -66,6 +68,23 @@ public:
     /// False on a headless machine, in CI, and whenever `enable_presentation`
     /// was not requested.
     [[nodiscard]] bool presentation_supported() const noexcept;
+
+    /// Instance extensions that were actually enabled.
+    ///
+    /// The window layer has to pass these to `QVulkanInstance::setExtensions()`
+    /// before it adopts our instance: Qt cannot discover them from a VkInstance
+    /// it did not create, and without them its surface creation has no idea the
+    /// platform surface extension is present.
+    [[nodiscard]] const std::vector<std::string>& enabled_extensions() const noexcept;
+
+    /// The underlying `VkInstance`, as an opaque integer.
+    ///
+    /// Exists only so the window layer can hand it to `QVulkanInstance`, which
+    /// is what produces a surface. The same narrow, documented exception as
+    /// `SurfaceHandle` in swapchain.hpp: Qt's API names Vulkan types, so the
+    /// alternative is rf_gpu depending on Qt, which is worse. Nothing else may
+    /// use this.
+    [[nodiscard]] std::uint64_t native_handle() const noexcept;
 
 private:
     class Impl;
