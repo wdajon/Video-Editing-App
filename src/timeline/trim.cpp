@@ -126,14 +126,20 @@ struct ShiftRoom {
         (std::numeric_limits<Ticks>::max() - last.start) - last.duration}};
 }
 
-/// Narrows `range` by what every sync-locked track other than the trimmed one
-/// allows. A ripple that the music bed on A2 has no room for cannot happen.
+[[nodiscard]] bool contains(const std::vector<TrackId>& tracks, TrackId id) {
+    return std::find(tracks.begin(), tracks.end(), id) != tracks.end();
+}
+
+/// Narrows `range` by what every sync-locked track allows, skipping the tracks
+/// that hold a member of the trim. A ripple the music bed on A2 has no room for
+/// cannot happen; a member's own track is moved by the trim itself and must not
+/// be moved a second time by the sweep (ADR 011 decision 4).
 [[nodiscard]] Result<TrimRange> narrow_by_sync_locked_tracks(const Document& document,
-                                                             const Neighbourhood& where,
-                                                             TrimKind kind, TrimRange range) {
-    const Ticks point = ripple_point(where.self());
+                                                             const std::vector<TrackId>& members,
+                                                             Ticks point, TrimKind kind,
+                                                             TrimRange range) {
     for (const Track& track : document.tracks()) {
-        if (track.id == where.track->id || !track.sync_locked) {
+        if (contains(members, track.id) || !track.sync_locked) {
             continue;
         }
         Result<std::optional<ShiftRoom>> room = room_on_track(track, point);
@@ -155,8 +161,8 @@ struct ShiftRoom {
     return range;
 }
 
-[[nodiscard]] Result<TrimRange> range_of(const Document& document, const Neighbourhood& where,
-                                         TrimKind kind) {
+/// What one clip's own track allows, before any other track is considered.
+[[nodiscard]] Result<TrimRange> own_track_range(const Neighbourhood& where, TrimKind kind) {
     const Clip& self = where.self();
     TrimRange range;
 
@@ -168,12 +174,12 @@ struct ShiftRoom {
             // left, so it cannot run out of room.
             range.min_delta = -self.source_in;
             range.max_delta = self.duration - 1;
-            return narrow_by_sync_locked_tracks(document, where, kind, range);
+            return range;
 
         case TrimKind::ripple_out:
             range.min_delta = 1 - self.duration;
             range.max_delta = std::min(tail(self), room_downstream(where));
-            return narrow_by_sync_locked_tracks(document, where, kind, range);
+            return range;
 
         case TrimKind::roll: {
             const Clip* incoming = where.next();
@@ -221,6 +227,68 @@ struct ShiftRoom {
     }
 
     return Error{Errc::internal, "unknown trim kind"};
+}
+
+/// The members of `clip`'s link group, each located on its track, with `clip`
+/// itself first.
+///
+/// An unlinked clip is a group of one, so nothing downstream has to distinguish
+/// the two cases. The named clip leads because bystander tracks ripple from its
+/// out point: members are aligned when linked, but an earlier edit can leave a
+/// group offset (ADR 011), and the clip the user acted on is the predictable
+/// choice of reference.
+[[nodiscard]] Result<std::vector<Neighbourhood>> locate_group(const Document& document,
+                                                              ClipId clip) {
+    const std::vector<ClipId> group = document.linked_clips(clip);
+    if (group.empty()) {
+        return Error{Errc::not_found, to_string(clip) + " does not exist"};
+    }
+    std::vector<Neighbourhood> members;
+    members.reserve(group.size());
+    for (const ClipId id : group) {
+        Result<Neighbourhood> where = locate(document, id);
+        if (!where) {
+            return where.error();
+        }
+        if (id == clip) {
+            members.insert(members.begin(), where.value());
+        } else {
+            members.push_back(where.value());
+        }
+    }
+    return members;
+}
+
+/// What the whole group allows: the intersection of every member's own track,
+/// then narrowed by the sync-locked tracks that hold no member.
+///
+/// The intersection is the point of the whole feature. If the audio has twenty
+/// ticks of tail and the picture has two hundred, the ripple stops at twenty and
+/// the pair stays together.
+[[nodiscard]] Result<TrimRange> group_range(const Document& document,
+                                            const std::vector<Neighbourhood>& members,
+                                            TrimKind kind) {
+    TrimRange range{std::numeric_limits<Ticks>::min(), std::numeric_limits<Ticks>::max()};
+    std::vector<TrackId> tracks;
+    tracks.reserve(members.size());
+
+    for (const Neighbourhood& member : members) {
+        Result<TrimRange> own = own_track_range(member, kind);
+        if (!own) {
+            // A roll with no butt-joined neighbour, say. Name the member, since
+            // it may be on a track the user was not looking at.
+            return own.error().with_context(to_string(member.self().id));
+        }
+        range.min_delta = std::max(range.min_delta, own.value().min_delta);
+        range.max_delta = std::min(range.max_delta, own.value().max_delta);
+        tracks.push_back(member.track->id);
+    }
+
+    if (!is_ripple(kind)) {
+        return range;
+    }
+    return narrow_by_sync_locked_tracks(document, tracks, ripple_point(members.front().self()),
+                                        kind, range);
 }
 
 /// Applies `kind` to a copy of the trimmed track's clips. `delta` is clamped.
@@ -285,24 +353,32 @@ struct ShiftRoom {
     return clips;
 }
 
-/// Every track the operation rewrites, trimmed track first.
+/// Every track the operation rewrites: one per link member, then the sync-locked
+/// tracks that hold no member.
 ///
-/// Only a ripple reaches beyond its own track. Roll, slip and slide all leave
-/// the sequence the same length, so there is no downstream material to move and
-/// nothing for a sync lock to do.
+/// Only a ripple reaches beyond the members' own tracks. Roll, slip and slide
+/// all leave the sequence the same length, so there is no downstream material to
+/// move and nothing for a sync lock to do.
 [[nodiscard]] std::vector<TrackClips> rewrite_all(const Document& document,
-                                                  const Neighbourhood& where, TrimKind kind,
-                                                  Ticks delta) {
+                                                  const std::vector<Neighbourhood>& members,
+                                                  TrimKind kind, Ticks delta) {
     std::vector<TrackClips> rewrites;
-    rewrites.push_back(TrackClips{where.track->id, rewrite_own_track(where, kind, delta)});
+    std::vector<TrackId> member_tracks;
+    for (const Neighbourhood& member : members) {
+        rewrites.push_back(
+            TrackClips{member.track->id, rewrite_own_track(member, kind, delta)});
+        member_tracks.push_back(member.track->id);
+    }
     if (!is_ripple(kind)) {
         return rewrites;
     }
 
-    const Ticks point = ripple_point(where.self());
+    const Ticks point = ripple_point(members.front().self());
     const Ticks shift = kind == TrimKind::ripple_in ? -delta : delta;
     for (const Track& track : document.tracks()) {
-        if (track.id == where.track->id || !track.sync_locked) {
+        // A member's track was already moved by the trim. Shifting it again here
+        // would move it twice -- ADR 011 decision 4.
+        if (contains(member_tracks, track.id) || !track.sync_locked) {
             continue;
         }
         std::vector<Clip> clips = track.clips;
@@ -334,11 +410,11 @@ public:
     [[nodiscard]] std::string_view name() const noexcept override { return to_string(kind_); }
 
     [[nodiscard]] Result<void> apply(Document& document) override {
-        Result<Neighbourhood> where = locate(document, clip_);
-        if (!where) {
-            return where.error();
+        Result<std::vector<Neighbourhood>> members = locate_group(document, clip_);
+        if (!members) {
+            return members.error();
         }
-        Result<TrimRange> range = range_of(document, where.value(), kind_);
+        Result<TrimRange> range = group_range(document, members.value(), kind_);
         if (!range) {
             return range.error();
         }
@@ -350,7 +426,7 @@ public:
                              std::to_string(requested_) + " ticks has no room to move"};
         }
 
-        std::vector<TrackClips> rewrites = rewrite_all(document, where.value(), kind_, applied);
+        std::vector<TrackClips> rewrites = rewrite_all(document, members.value(), kind_, applied);
         // Capture the previous state of exactly the tracks about to change --
         // undo has to put back every one of them, not just the trimmed one.
         before_.clear();
@@ -390,24 +466,24 @@ Ticks clamp_delta(const TrimRange& range, Ticks delta) noexcept {
 }
 
 Result<TrimRange> trim_range(const Document& document, ClipId clip, TrimKind kind) {
-    Result<Neighbourhood> where = locate(document, clip);
-    if (!where) {
-        return where.error();
+    Result<std::vector<Neighbourhood>> members = locate_group(document, clip);
+    if (!members) {
+        return members.error();
     }
-    return range_of(document, where.value(), kind);
+    return group_range(document, members.value(), kind);
 }
 
 Result<std::vector<TrackClips>> plan_trim(const Document& document, ClipId clip, TrimKind kind,
                                           Ticks delta) {
-    Result<Neighbourhood> where = locate(document, clip);
-    if (!where) {
-        return where.error();
+    Result<std::vector<Neighbourhood>> members = locate_group(document, clip);
+    if (!members) {
+        return members.error();
     }
-    Result<TrimRange> range = range_of(document, where.value(), kind);
+    Result<TrimRange> range = group_range(document, members.value(), kind);
     if (!range) {
         return range.error();
     }
-    return rewrite_all(document, where.value(), kind, clamp_delta(range.value(), delta));
+    return rewrite_all(document, members.value(), kind, clamp_delta(range.value(), delta));
 }
 
 std::unique_ptr<Command> make_trim(ClipId clip, TrimKind kind, Ticks delta) {

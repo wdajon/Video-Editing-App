@@ -16,7 +16,7 @@ Repository: https://github.com/wdajon/Video-Editing-App (public)
 | M1 — probe, decode, frame-accurate seek | **Gate met.** 200/200 random seeks correct on a 10-min 4K file. Performance budget **not** met — see D9. |
 | M2 — timeline model + undo/redo | **Gate met.** 10,000-operation fuzz, undo returns byte-identical. |
 | M3 — GPU compositor + playback | **Gate met** 2026-08-05. 1800 frames presented, 0 dropped, p99 36.67 ms, confirmed visually by the project owner. See the caveats in `PROGRESS.md`. |
-| M4 — panels, docking, workspaces, JKL | **In progress, iteration 2 of 5.** The trim set and sync lock exist in the model (ADR 009, ADR 010). No keyboard, no panels yet. |
+| M4 — panels, docking, workspaces, JKL | **In progress, iteration 3 of 5.** The trim model is complete — the four operations, sync lock and linked clips (ADR 009, 010, 011). No keyboard, no panels yet; that is the rest of the gate. |
 | M5 onward | Not started. |
 
 Zero warnings at `/W4 /WX` and `-Wall -Wextra -Werror`.
@@ -31,7 +31,7 @@ fact. Get the number from the suite:
 ctest --preset windows-debug
 ```
 
-At M4 iteration 2 (2026-08-06) that was **339**: core 48, media 92, timeline 107,
+At M4 iteration 3 (2026-08-06) that was **360**: core 48, media 92, timeline 128,
 gpu 42, playback 40, app 10. Treat it as a dated snapshot, not a claim about now.
 
 ### Seeing it run
@@ -164,10 +164,10 @@ Full detail in `docs/BACKLOG.md`. The ones that shape upcoming work:
   extraction stays confined to one module.
 - **D8** — every decoded frame is copied out of libav. Correct and portable, and
   too slow for the M3 playback budget. Needs a zero-copy path to the GPU.
-- **D16** — linked clips do not exist, so a ripple on a V1 clip does not trim its
-  A1 counterpart and the pair desyncs. **This blocks the M4 gate** and is the
-  next thing to fix. Do not read D15 as having covered it — sync lock shifts
-  downstream material and never trims; ADR 010 records why the two are separate.
+- **D18** — a desynced link is invisible. A ripple upstream can legitimately pull
+  a linked pair apart when the user has unlocked one track's sync; Premiere shows
+  a red out-of-sync indicator and ReelForge shows nothing. **Open against the M4
+  gate.**
 - **D14** — media length lives on `Clip::source_duration` rather than in a media
   pool, so two clips cut from one source repeat the value.
 - **D10** — TSan cannot see libav's internal threading, so decoder threading is

@@ -44,6 +44,7 @@ struct Clip {
     Ticks source_duration = 0;  ///< Usable extent of the source, from source tick 0.
     Ticks start = 0;            ///< Position on the timeline.
     Ticks duration = 0;         ///< Always > 0 for a clip that exists.
+    LinkId link;                ///< Group that trims together; null when unlinked.
     bool enabled = true;
 
     friend bool operator==(const Clip&, const Clip&) = default;
@@ -163,6 +164,26 @@ public:
     /// `replace_track_clips` is a one-element call into this, so the two cannot
     /// disagree about what is legal. See docs/adr/010-sync-lock.md.
     [[nodiscard]] Result<void> replace_clips(std::vector<TrackClips> rewrites);
+
+    /// Groups clips so they trim together -- a picture and its audio.
+    ///
+    /// Refuses unless every member has the same `start` and `duration` and no
+    /// two share a track. That alignment is what lets a trim be the same delta
+    /// on each member with no per-member offset anywhere, so a linked pair
+    /// cannot drift by construction. See docs/adr/011-linked-clips.md.
+    [[nodiscard]] Result<LinkId> link_clips(const std::vector<ClipId>& clips);
+
+    /// Dissolves a group, leaving every member where it is.
+    [[nodiscard]] Result<void> unlink(LinkId id);
+
+    /// Every clip in `id`'s group, in document order. A clip with a null link
+    /// returns just itself, so callers never need to special-case an unlinked
+    /// clip.
+    [[nodiscard]] std::vector<ClipId> linked_clips(ClipId id) const;
+
+    /// Restores a link on clips that already carry the right ids. Used by undo,
+    /// which must put a dissolved group back under the id it had.
+    [[nodiscard]] Result<void> relink(LinkId id, const std::vector<ClipId>& clips);
 
     [[nodiscard]] Result<void> set_track_muted(TrackId id, bool muted);
     [[nodiscard]] Result<void> set_track_locked(TrackId id, bool locked);

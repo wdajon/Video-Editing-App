@@ -14,6 +14,7 @@ using rf::media::Rational;
 using rf::timeline::Clip;
 using rf::timeline::ClipId;
 using rf::timeline::Document;
+using rf::timeline::LinkId;
 using rf::timeline::Track;
 using rf::timeline::TrackId;
 using rf::timeline::TrackKind;
@@ -417,6 +418,114 @@ TEST(Document, RefusesATrimThatWouldOverlapANeighbour) {
     const auto trimmed = document.set_clip_bounds(first, 0, 0, 150);
     ASSERT_TRUE(trimmed.has_error());
     EXPECT_EQ(document.find_clip(first)->duration, 100) << "a refused trim must change nothing";
+}
+
+// --- links (ADR 011) ---------------------------------------------------------
+
+TEST(Document, LinksAlignedClipsOnDifferentTracks) {
+    Document document = make_document();
+    const TrackId video = document.add_track(TrackKind::video, "V1").value();
+    const TrackId audio = document.add_track(TrackKind::audio, "A1").value();
+    const ClipId picture = document.add_clip(video, "a.mp4", 0, 100, 50, kSourceTicks).value();
+    const ClipId sound = document.add_clip(audio, "a.wav", 0, 100, 50, kSourceTicks).value();
+
+    const auto link = document.link_clips({picture, sound});
+    ASSERT_TRUE(link.has_value()) << link.error().to_string();
+    EXPECT_EQ(document.find_clip(picture)->link, link.value());
+    EXPECT_EQ(document.find_clip(sound)->link, link.value());
+    EXPECT_EQ(document.linked_clips(picture).size(), 2u);
+    EXPECT_EQ(document.linked_clips(sound).size(), 2u);
+}
+
+TEST(Document, RefusesToLinkMisalignedClips) {
+    // The invariant the whole design rests on: with aligned members a trim is
+    // one delta applied to each, and drift cannot be represented.
+    Document document = make_document();
+    const TrackId video = document.add_track(TrackKind::video, "V1").value();
+    const TrackId audio = document.add_track(TrackKind::audio, "A1").value();
+    const ClipId picture = document.add_clip(video, "a.mp4", 0, 100, 50, kSourceTicks).value();
+    const ClipId late = document.add_clip(audio, "a.wav", 0, 101, 50, kSourceTicks).value();
+    const ClipId longer = document.add_clip(audio, "b.wav", 0, 200, 51, kSourceTicks).value();
+
+    EXPECT_TRUE(document.link_clips({picture, late}).has_error()) << "starts differ";
+    EXPECT_TRUE(document.link_clips({picture, longer}).has_error()) << "durations differ";
+    EXPECT_FALSE(document.find_clip(picture)->link.is_valid())
+        << "a refused link must leave no trace";
+}
+
+TEST(Document, RefusesToLinkTwoClipsOnOneTrack) {
+    Document document = make_document();
+    const TrackId video = document.add_track(TrackKind::video, "V1").value();
+    const ClipId first = document.add_clip(video, "a.mp4", 0, 0, 50, kSourceTicks).value();
+    // Same span is impossible on one track, so this can never be both aligned
+    // and on one track -- but the check must not depend on that coincidence.
+    const ClipId second = document.add_clip(video, "b.mp4", 0, 100, 50, kSourceTicks).value();
+    EXPECT_TRUE(document.link_clips({first, second}).has_error());
+}
+
+TEST(Document, RefusesADegenerateOrUnknownLink) {
+    Document document = make_document();
+    const TrackId video = document.add_track(TrackKind::video, "V1").value();
+    const ClipId only = document.add_clip(video, "a.mp4", 0, 0, 50, kSourceTicks).value();
+
+    EXPECT_TRUE(document.link_clips({}).has_error()) << "nothing to link";
+    EXPECT_TRUE(document.link_clips({only}).has_error()) << "a link needs two";
+    EXPECT_EQ(document.link_clips({only, ClipId{999}}).error().code(), Errc::not_found);
+}
+
+TEST(Document, RefusesToLinkAClipThatIsAlreadyLinked) {
+    Document document = make_document();
+    const TrackId video = document.add_track(TrackKind::video, "V1").value();
+    const TrackId a1 = document.add_track(TrackKind::audio, "A1").value();
+    const TrackId a2 = document.add_track(TrackKind::audio, "A2").value();
+    const ClipId picture = document.add_clip(video, "a.mp4", 0, 0, 50, kSourceTicks).value();
+    const ClipId left = document.add_clip(a1, "l.wav", 0, 0, 50, kSourceTicks).value();
+    const ClipId right = document.add_clip(a2, "r.wav", 0, 0, 50, kSourceTicks).value();
+
+    ASSERT_TRUE(document.link_clips({picture, left}).has_value());
+    EXPECT_EQ(document.link_clips({picture, right}).error().code(), Errc::already_exists);
+}
+
+TEST(Document, LinksSpendAnIdSoUndoCanGiveItBack) {
+    Document document = make_document();
+    const TrackId video = document.add_track(TrackKind::video, "V1").value();
+    const TrackId audio = document.add_track(TrackKind::audio, "A1").value();
+    const ClipId picture = document.add_clip(video, "a.mp4", 0, 0, 50, kSourceTicks).value();
+    const ClipId sound = document.add_clip(audio, "a.wav", 0, 0, 50, kSourceTicks).value();
+
+    const std::uint64_t before = document.next_id();
+    ASSERT_TRUE(document.link_clips({picture, sound}).has_value());
+    EXPECT_EQ(document.next_id(), before + 1) << "a link id comes from the one counter, like all";
+}
+
+TEST(Document, UnlinkLeavesTheClipsWhereTheyAre) {
+    Document document = make_document();
+    const TrackId video = document.add_track(TrackKind::video, "V1").value();
+    const TrackId audio = document.add_track(TrackKind::audio, "A1").value();
+    const ClipId picture = document.add_clip(video, "a.mp4", 0, 100, 50, kSourceTicks).value();
+    const ClipId sound = document.add_clip(audio, "a.wav", 0, 100, 50, kSourceTicks).value();
+    const LinkId link = document.link_clips({picture, sound}).value();
+
+    ASSERT_TRUE(document.unlink(link).has_value());
+    EXPECT_FALSE(document.find_clip(picture)->link.is_valid());
+    EXPECT_FALSE(document.find_clip(sound)->link.is_valid());
+    EXPECT_EQ(document.find_clip(picture)->start, 100) << "unlinking is not a move";
+    EXPECT_EQ(document.unlink(link).error().code(), Errc::not_found) << "already gone";
+}
+
+TEST(Document, RemovingAMemberLeavesTheRestLinked) {
+    // A group of one behaves exactly as an unlinked clip, which is what keeps
+    // clip removal from having to rewrite anyone else's state.
+    Document document = make_document();
+    const TrackId video = document.add_track(TrackKind::video, "V1").value();
+    const TrackId audio = document.add_track(TrackKind::audio, "A1").value();
+    const ClipId picture = document.add_clip(video, "a.mp4", 0, 0, 50, kSourceTicks).value();
+    const ClipId sound = document.add_clip(audio, "a.wav", 0, 0, 50, kSourceTicks).value();
+    ASSERT_TRUE(document.link_clips({picture, sound}).has_value());
+
+    ASSERT_TRUE(document.remove_clip(sound).has_value());
+    EXPECT_EQ(document.linked_clips(picture), std::vector<ClipId>{picture});
+    EXPECT_TRUE(document.find_clip(picture)->link.is_valid()) << "the group id survives";
 }
 
 TEST(Document, TogglesFlags) {
