@@ -92,7 +92,8 @@ private:
 [[nodiscard]] std::unique_ptr<Command> make_add_track(TrackKind kind, std::string name);
 [[nodiscard]] std::unique_ptr<Command> make_remove_track(TrackId id);
 [[nodiscard]] std::unique_ptr<Command> make_add_clip(TrackId track, std::string source,
-                                                     Ticks source_in, Ticks start, Ticks duration);
+                                                     Ticks source_in, Ticks start, Ticks duration,
+                                                     Ticks source_duration);
 [[nodiscard]] std::unique_ptr<Command> make_remove_clip(ClipId id);
 [[nodiscard]] std::unique_ptr<Command> make_move_clip(ClipId id, TrackId to_track, Ticks new_start);
 [[nodiscard]] std::unique_ptr<Command> make_set_clip_bounds(ClipId id, Ticks source_in, Ticks start,

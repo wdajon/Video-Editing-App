@@ -17,6 +17,9 @@ using rf::timeline::TrackId;
 using rf::timeline::TrackKind;
 using rf::timeline::serialise;
 
+/// Long enough that the source is never the binding constraint in these tests.
+constexpr rf::timeline::Ticks kSourceTicks = 1'000'000;
+
 Document make_document() {
     auto document = Document::create(Rational{1, 90000});
     EXPECT_TRUE(document.has_value());
@@ -113,7 +116,7 @@ TEST(Command, AddClipUndoesToTheOriginalBytes) {
     const TrackId track = document.tracks().front().id;
     const std::string before = serialise(document);
 
-    must_execute(stack, document, rf::timeline::make_add_clip(track, "a.mp4", 10, 0, 100));
+    must_execute(stack, document, rf::timeline::make_add_clip(track, "a.mp4", 10, 0, 100, kSourceTicks));
     ASSERT_TRUE(stack.undo(document).has_value());
     EXPECT_EQ(serialise(document), before);
 }
@@ -123,7 +126,7 @@ TEST(Command, RemoveClipRestoresEveryField) {
     CommandStack stack;
     must_execute(stack, document, rf::timeline::make_add_track(TrackKind::video, "V1"));
     const TrackId track = document.tracks().front().id;
-    must_execute(stack, document, rf::timeline::make_add_clip(track, "a.mp4", 77, 500, 250));
+    must_execute(stack, document, rf::timeline::make_add_clip(track, "a.mp4", 77, 500, 250, kSourceTicks));
     const ClipId clip = document.tracks().front().clips.front().id;
     must_execute(stack, document, rf::timeline::make_set_clip_enabled(clip, false));
 
@@ -142,8 +145,8 @@ TEST(Command, RemoveTrackRestoresItsClipsAndItsPosition) {
     must_execute(stack, document, rf::timeline::make_add_track(TrackKind::video, "V2"));
     must_execute(stack, document, rf::timeline::make_add_track(TrackKind::video, "V3"));
     const TrackId middle = document.tracks()[1].id;
-    must_execute(stack, document, rf::timeline::make_add_clip(middle, "a.mp4", 0, 0, 100));
-    must_execute(stack, document, rf::timeline::make_add_clip(middle, "b.mp4", 0, 200, 100));
+    must_execute(stack, document, rf::timeline::make_add_clip(middle, "a.mp4", 0, 0, 100, kSourceTicks));
+    must_execute(stack, document, rf::timeline::make_add_clip(middle, "b.mp4", 0, 200, 100, kSourceTicks));
 
     const std::string before = serialise(document);
     must_execute(stack, document, rf::timeline::make_remove_track(middle));
@@ -160,7 +163,7 @@ TEST(Command, MoveClipUndoesAcrossTracks) {
     must_execute(stack, document, rf::timeline::make_add_track(TrackKind::video, "V2"));
     const TrackId first = document.tracks()[0].id;
     const TrackId second = document.tracks()[1].id;
-    must_execute(stack, document, rf::timeline::make_add_clip(first, "a.mp4", 0, 100, 100));
+    must_execute(stack, document, rf::timeline::make_add_clip(first, "a.mp4", 0, 100, 100, kSourceTicks));
     const ClipId clip = document.tracks()[0].clips.front().id;
 
     const std::string before = serialise(document);
@@ -177,7 +180,7 @@ TEST(Command, TrimUndoesToTheOriginalBounds) {
     CommandStack stack;
     must_execute(stack, document, rf::timeline::make_add_track(TrackKind::video, "V1"));
     const TrackId track = document.tracks().front().id;
-    must_execute(stack, document, rf::timeline::make_add_clip(track, "a.mp4", 100, 0, 500));
+    must_execute(stack, document, rf::timeline::make_add_clip(track, "a.mp4", 100, 0, 500, kSourceTicks));
     const ClipId clip = document.tracks().front().clips.front().id;
 
     const std::string before = serialise(document);
@@ -210,7 +213,7 @@ TEST(Command, RedoAfterUndoReusesTheSameIds) {
     CommandStack stack;
     must_execute(stack, document, rf::timeline::make_add_track(TrackKind::video, "V1"));
     const TrackId track = document.tracks().front().id;
-    must_execute(stack, document, rf::timeline::make_add_clip(track, "a.mp4", 0, 0, 100));
+    must_execute(stack, document, rf::timeline::make_add_clip(track, "a.mp4", 0, 0, 100, kSourceTicks));
 
     const std::string after_edits = serialise(document);
     const ClipId original = document.tracks().front().clips.front().id;
@@ -232,7 +235,7 @@ TEST(Command, DeepHistoryUndoesInReverseOrder) {
     for (int i = 0; i < 50; ++i) {
         must_execute(stack, document,
                      rf::timeline::make_add_clip(track, "c" + std::to_string(i) + ".mp4", 0,
-                                                 i * 200, 100));
+                                                 i * 200, 100, kSourceTicks));
     }
     EXPECT_EQ(document.clip_count(), 50u);
 
@@ -246,7 +249,7 @@ TEST(Command, DeepHistoryUndoesInReverseOrder) {
     // And undoing that last one lands on a pristine document, id counter reset.
     ASSERT_TRUE(stack.undo(document).has_value());
     EXPECT_EQ(serialise(document),
-              "reelforge/1\n"
+              "reelforge/2\n"
               "timebase 1/90000\n"
               "nextid 1\n");
 }

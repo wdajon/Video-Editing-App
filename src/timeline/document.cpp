@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -123,6 +124,46 @@ Result<void> Document::check_no_overlap(const Track& track, Ticks start, Ticks d
     return ok();
 }
 
+Result<void> Document::check_span(Ticks source_in, Ticks start, Ticks duration,
+                                  Ticks source_duration) {
+    if (duration <= 0) {
+        return Error{Errc::invalid_argument,
+                     "clip duration must be positive, got " + std::to_string(duration)};
+    }
+    if (start < 0) {
+        return Error{Errc::invalid_argument,
+                     "clip start must not be negative, got " + std::to_string(start)};
+    }
+    if (source_in < 0) {
+        return Error{Errc::invalid_argument,
+                     "clip source_in must not be negative, got " + std::to_string(source_in)};
+    }
+    // A clip whose end is not representable would make every downstream
+    // arithmetic step -- a ripple's shift, a slide's limit -- an overflow
+    // waiting to happen. Refusing it here is what lets the trim ranges be
+    // computed with plain signed arithmetic and no saturation logic.
+    if (start > std::numeric_limits<Ticks>::max() - duration) {
+        return Error{Errc::invalid_argument, "clip start " + std::to_string(start) + " plus " +
+                                                 std::to_string(duration) +
+                                                 " ticks is not representable"};
+    }
+    if (source_duration < 0) {
+        return Error{Errc::invalid_argument, "clip source_duration must not be negative, got " +
+                                                 std::to_string(source_duration)};
+    }
+    // Written as a subtraction so a source_in near INT64_MAX cannot overflow the
+    // addition and wrap into a value that passes. Both operands are known
+    // non-negative by the checks above, so the subtraction itself cannot
+    // overflow either.
+    if (source_duration - source_in < duration) {
+        return Error{Errc::invalid_argument,
+                     "clip needs " + std::to_string(duration) + " ticks from source offset " +
+                         std::to_string(source_in) + ", but the source has only " +
+                         std::to_string(source_duration) + " ticks"};
+    }
+    return ok();
+}
+
 Result<TrackId> Document::add_track(TrackKind kind, std::string name) {
     Track track;
     track.id = TrackId{next_id_++};
@@ -172,18 +213,9 @@ Result<Track> Document::remove_track(TrackId id) {
 }
 
 Result<ClipId> Document::add_clip(TrackId track_id, std::string source, Ticks source_in,
-                                  Ticks start, Ticks duration) {
-    if (duration <= 0) {
-        return Error{Errc::invalid_argument,
-                     "clip duration must be positive, got " + std::to_string(duration)};
-    }
-    if (start < 0) {
-        return Error{Errc::invalid_argument,
-                     "clip start must not be negative, got " + std::to_string(start)};
-    }
-    if (source_in < 0) {
-        return Error{Errc::invalid_argument,
-                     "clip source_in must not be negative, got " + std::to_string(source_in)};
+                                  Ticks start, Ticks duration, Ticks source_duration) {
+    if (Result<void> span = check_span(source_in, start, duration, source_duration); !span) {
+        return span.error();
     }
 
     Track* track = mutable_track(track_id);
@@ -198,6 +230,7 @@ Result<ClipId> Document::add_clip(TrackId track_id, std::string source, Ticks so
     clip.id = ClipId{next_id_++};
     clip.source = std::move(source);
     clip.source_in = source_in;
+    clip.source_duration = source_duration;
     clip.start = start;
     clip.duration = duration;
     const ClipId id = clip.id;
@@ -207,8 +240,10 @@ Result<ClipId> Document::add_clip(TrackId track_id, std::string source, Ticks so
 }
 
 Result<void> Document::insert_clip(TrackId track_id, const Clip& clip) {
-    if (clip.duration <= 0) {
-        return Error{Errc::invalid_argument, "clip duration must be positive"};
+    if (Result<void> span = check_span(clip.source_in, clip.start, clip.duration,
+                                       clip.source_duration);
+        !span) {
+        return span.error();
     }
     if (!clip.id.is_valid()) {
         return Error{Errc::invalid_argument, "cannot insert a clip with the null id"};
@@ -274,16 +309,13 @@ Result<void> Document::move_clip(ClipId id, TrackId to_track, Ticks new_start) {
 }
 
 Result<void> Document::set_clip_bounds(ClipId id, Ticks source_in, Ticks start, Ticks duration) {
-    if (duration <= 0) {
-        return Error{Errc::invalid_argument, "clip duration must be positive"};
-    }
-    if (start < 0 || source_in < 0) {
-        return Error{Errc::invalid_argument, "clip start and source_in must not be negative"};
-    }
-
     const Track* owner = track_of_clip(id);
     if (owner == nullptr) {
         return Error{Errc::not_found, to_string(id) + " does not exist"};
+    }
+    if (Result<void> span = check_span(source_in, start, duration, find_clip(id)->source_duration);
+        !span) {
+        return span.error();
     }
     if (Result<void> clear = check_no_overlap(*owner, start, duration, id); !clear) {
         return clear.error();
@@ -294,6 +326,58 @@ Result<void> Document::set_clip_bounds(ClipId id, Ticks source_in, Ticks start, 
     clip->start = start;
     clip->duration = duration;
     sort_clips(*mutable_track(owner->id));
+    return ok();
+}
+
+Result<void> Document::replace_track_clips(TrackId id, std::vector<Clip> clips) {
+    Track* track = mutable_track(id);
+    if (track == nullptr) {
+        return Error{Errc::not_found, to_string(id) + " does not exist"};
+    }
+    if (clips.size() != track->clips.size()) {
+        return Error{Errc::invalid_argument,
+                     "replacement for " + to_string(id) + " has " + std::to_string(clips.size()) +
+                         " clips, the track has " + std::to_string(track->clips.size())};
+    }
+
+    for (const Clip& clip : clips) {
+        if (Result<void> span = check_span(clip.source_in, clip.start, clip.duration,
+                                           clip.source_duration);
+            !span) {
+            return span.error().with_context(to_string(clip.id));
+        }
+        // The id set has to match exactly. A replacement that introduces an id
+        // would spend one the counter never issued, and one that drops an id
+        // would delete a clip through a primitive whose inverse assumes nothing
+        // was destroyed. Both would break ADR 005's byte-identity guarantee in a
+        // way no overlap check would notice.
+        const auto same_id = [&clip](const Clip& existing) { return existing.id == clip.id; };
+        if (std::none_of(track->clips.begin(), track->clips.end(), same_id)) {
+            return Error{Errc::invalid_argument,
+                         to_string(clip.id) + " is not on " + to_string(id)};
+        }
+        if (std::count_if(clips.begin(), clips.end(), same_id) != 1) {
+            return Error{Errc::invalid_argument,
+                         to_string(clip.id) + " appears more than once in the replacement"};
+        }
+    }
+
+    // Sizes match, every incoming id is on the track, and no incoming id repeats,
+    // so the two sets are equal without a second sweep.
+    Track candidate;
+    candidate.clips = std::move(clips);
+    sort_clips(candidate);
+    for (std::size_t i = 1; i < candidate.clips.size(); ++i) {
+        const Clip& previous = candidate.clips[i - 1];
+        const Clip& current = candidate.clips[i];
+        if (current.start < previous.start + previous.duration) {
+            return Error{Errc::invalid_argument, to_string(current.id) + " would overlap " +
+                                                     to_string(previous.id) + " on " +
+                                                     to_string(id)};
+        }
+    }
+
+    track->clips = std::move(candidate.clips);
     return ok();
 }
 

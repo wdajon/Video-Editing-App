@@ -96,18 +96,21 @@ private:
 
 class AddClipCommand final : public CreatingCommand {
 public:
-    AddClipCommand(TrackId track, std::string source, Ticks source_in, Ticks start, Ticks duration)
+    AddClipCommand(TrackId track, std::string source, Ticks source_in, Ticks start, Ticks duration,
+                   Ticks source_duration)
         : source_(std::move(source)),
           track_(track),
           source_in_(source_in),
           start_(start),
-          duration_(duration) {}
+          duration_(duration),
+          source_duration_(source_duration) {}
 
     [[nodiscard]] std::string_view name() const noexcept override { return "Add Clip"; }
 
 protected:
     [[nodiscard]] Result<void> create_first_time(Document& document) override {
-        Result<ClipId> id = document.add_clip(track_, source_, source_in_, start_, duration_);
+        Result<ClipId> id =
+            document.add_clip(track_, source_, source_in_, start_, duration_, source_duration_);
         if (!id) {
             return id.error();
         }
@@ -134,6 +137,7 @@ private:
     Ticks source_in_;
     Ticks start_;
     Ticks duration_;
+    Ticks source_duration_;
 };
 
 /// Removal captures the whole object *and* where it sat, because restoring a
@@ -419,8 +423,9 @@ std::unique_ptr<Command> make_remove_track(TrackId id) {
 }
 
 std::unique_ptr<Command> make_add_clip(TrackId track, std::string source, Ticks source_in,
-                                       Ticks start, Ticks duration) {
-    return std::make_unique<AddClipCommand>(track, std::move(source), source_in, start, duration);
+                                       Ticks start, Ticks duration, Ticks source_duration) {
+    return std::make_unique<AddClipCommand>(track, std::move(source), source_in, start, duration,
+                                            source_duration);
 }
 
 std::unique_ptr<Command> make_remove_clip(ClipId id) {

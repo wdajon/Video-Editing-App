@@ -22,7 +22,10 @@ namespace rf::timeline {
 /// Schema version written into the header. Bumped whenever the meaning or
 /// layout of any field changes; a reader that does not recognise a version must
 /// refuse the file rather than guess.
-inline constexpr int kProjectFormatVersion = 1;
+/// Version 2 added `source_duration` to the clip record (ADR 009). A version 1
+/// file is missing a field with no safe default, so it cannot be read by
+/// widening alone -- which is the case the version number was put here for.
+inline constexpr int kProjectFormatVersion = 2;
 
 /// Serialises `document` canonically.
 ///
