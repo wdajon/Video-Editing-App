@@ -74,6 +74,8 @@ std::string serialise(const Document& document) {
             out.push_back(' ');
             out.append(std::to_string(clip.source_in));
             out.push_back(' ');
+            out.append(std::to_string(clip.source_duration));
+            out.push_back(' ');
             out.append(std::to_string(clip.start));
             out.push_back(' ');
             out.append(std::to_string(clip.duration));

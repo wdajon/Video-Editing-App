@@ -38,6 +38,10 @@ using rf::timeline::TrackId;
 using rf::timeline::TrackKind;
 using rf::timeline::serialise;
 
+/// Long enough that the source is never the binding constraint here. This fuzz
+/// is about the command stack; the media limit from ADR 009 has its own tests.
+constexpr Ticks kSourceTicks = 1'000'000;
+
 struct Counters {
     int attempted = 0;
     int applied = 0;
@@ -72,7 +76,8 @@ std::unique_ptr<rf::timeline::Command> random_command(const Document& document,
         const Ticks start = pick_ticks();
         const Ticks duration = static_cast<Ticks>(1 + (random() % 2000));
         return rf::timeline::make_add_clip(pick_track(), "m" + std::to_string(random() % 50) + ".mp4",
-                                           static_cast<Ticks>(random() % 5000), start, duration);
+                                           static_cast<Ticks>(random() % 5000), start, duration,
+                                           kSourceTicks);
     }
     if (choice < 50) {
         return rf::timeline::make_remove_clip(pick_clip());
