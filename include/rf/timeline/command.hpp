@@ -102,6 +102,8 @@ private:
 [[nodiscard]] std::unique_ptr<Command> make_set_track_muted(TrackId id, bool muted);
 [[nodiscard]] std::unique_ptr<Command> make_set_track_locked(TrackId id, bool locked);
 [[nodiscard]] std::unique_ptr<Command> make_set_track_sync_locked(TrackId id, bool sync_locked);
+[[nodiscard]] std::unique_ptr<Command> make_link_clips(std::vector<ClipId> clips);
+[[nodiscard]] std::unique_ptr<Command> make_unlink_clips(LinkId link);
 
 }  // namespace rf::timeline
 

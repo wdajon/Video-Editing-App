@@ -25,6 +25,7 @@ using rf::timeline::Clip;
 using rf::timeline::ClipId;
 using rf::timeline::CommandStack;
 using rf::timeline::Document;
+using rf::timeline::LinkId;
 using rf::timeline::Ticks;
 using rf::timeline::TrackId;
 using rf::timeline::TrackKind;
@@ -563,6 +564,184 @@ TEST(SyncLock, ATrackWithNothingAfterThePointIsNotPartOfTheEdit) {
     ASSERT_TRUE(planned.has_value());
     EXPECT_EQ(planned.value().size(), 1u)
         << "a track with no downstream material must not enter the undo record";
+}
+
+// --- linked clips (ADR 011) --------------------------------------------------
+//
+// The defect D16 named: a ripple on a picture clip that leaves its audio at the
+// old length. Sync lock cannot fix it, because sync lock shifts and never trims.
+
+/// `Fixture`'s video track, plus an audio track carrying a clip aligned with `b`
+/// and linked to it -- the picture and its sound.
+struct LinkFixture : Fixture {
+    TrackId audio;
+    ClipId sound;
+    ClipId after;
+
+    explicit LinkFixture(Ticks sound_source_duration = 300) {
+        audio = document.add_track(TrackKind::audio, "A1").value();
+        sound = document.add_clip(audio, "b.wav", 100, 100, 100, sound_source_duration).value();
+        after = document.add_clip(audio, "next.wav", 0, 200, 100, 1000).value();
+        EXPECT_TRUE(document.link_clips({b, sound}).has_value());
+    }
+
+    [[nodiscard]] const std::vector<Clip>& audio_clips() const {
+        return document.find_track(audio)->clips;
+    }
+};
+
+TEST(LinkedClips, ARippleTrimsEveryMemberByTheSameAmount) {
+    LinkFixture fixture;
+    CommandStack stack;
+    must_trim(fixture, stack, fixture.b, TrimKind::ripple_out, 20);
+
+    EXPECT_EQ(fixture.clip(fixture.b).duration, 120);
+    EXPECT_EQ(fixture.clip(fixture.sound).duration, 120)
+        << "the audio must be trimmed, not merely shifted";
+    EXPECT_EQ(fixture.clip(fixture.sound).start, 100);
+    EXPECT_EQ(fixture.clip(fixture.b).start, fixture.clip(fixture.sound).start);
+    EXPECT_EQ(fixture.clip(fixture.b).duration, fixture.clip(fixture.sound).duration)
+        << "the pair must still be aligned after the trim";
+}
+
+TEST(LinkedClips, TrimmingEitherMemberTrimsBoth) {
+    // The user clicks the audio as readily as the picture.
+    LinkFixture fixture;
+    CommandStack stack;
+    must_trim(fixture, stack, fixture.sound, TrimKind::ripple_out, 20);
+
+    EXPECT_EQ(fixture.clip(fixture.b).duration, 120);
+    EXPECT_EQ(fixture.clip(fixture.sound).duration, 120);
+}
+
+TEST(LinkedClips, EachMemberRipplesItsOwnDownstreamMaterial) {
+    LinkFixture fixture;
+    CommandStack stack;
+    must_trim(fixture, stack, fixture.b, TrimKind::ripple_out, 20);
+
+    EXPECT_EQ(fixture.clip(fixture.c).start, 220) << "video downstream";
+    EXPECT_EQ(fixture.clip(fixture.after).start, 220) << "audio downstream";
+}
+
+TEST(LinkedClips, AMemberTrackIsNotShiftedTwice) {
+    // The audio track is moved by the trim, so the sync-lock sweep must skip it.
+    // Shifting it again would move the downstream audio by 40 where the video
+    // moved by 20 -- a desync produced by the very feature meant to prevent one.
+    LinkFixture fixture;
+    ASSERT_TRUE(fixture.document.find_track(fixture.audio)->sync_locked)
+        << "sanity: the track is sync-locked, so the sweep would reach it";
+
+    CommandStack stack;
+    must_trim(fixture, stack, fixture.b, TrimKind::ripple_out, 20);
+    EXPECT_EQ(fixture.clip(fixture.after).start, 220) << "moved once, by 20, not twice";
+}
+
+TEST(LinkedClips, TheRangeIsTheIntersectionOfEveryMember) {
+    // The picture has 100 ticks of tail; the sound has 20. A ripple that used
+    // the picture's limit would run the audio past the end of its media.
+    LinkFixture fixture(220);  // sound: source_in 100 + duration 100 + 20 tail
+
+    const TrimRange range = trim_range(fixture.document, fixture.b, TrimKind::ripple_out).value();
+    EXPECT_EQ(range.max_delta, 20) << "the shorter source binds the pair";
+}
+
+TEST(LinkedClips, ATrimClampsToTheShorterMemberAndStaysAligned) {
+    LinkFixture fixture(220);
+    CommandStack stack;
+    must_trim(fixture, stack, fixture.b, TrimKind::ripple_out, 10'000);
+
+    const Clip& picture = fixture.clip(fixture.b);
+    const Clip& sound = fixture.clip(fixture.sound);
+    EXPECT_EQ(picture.duration, 120) << "clamped to the sound's 20 ticks of tail";
+    EXPECT_EQ(sound.duration, 120);
+    EXPECT_EQ(sound.source_in + sound.duration, sound.source_duration) << "sound is at its limit";
+    EXPECT_LT(picture.source_in + picture.duration, picture.source_duration)
+        << "the picture still has media left, and stopped anyway";
+}
+
+TEST(LinkedClips, SlipAppliesToBothMembers) {
+    LinkFixture fixture;
+    CommandStack stack;
+    must_trim(fixture, stack, fixture.b, TrimKind::slip, -40);
+
+    EXPECT_EQ(fixture.clip(fixture.b).source_in, 60);
+    EXPECT_EQ(fixture.clip(fixture.sound).source_in, 60)
+        << "slipping the picture and not the sound is a lip-sync error";
+    EXPECT_EQ(fixture.clip(fixture.sound).start, 100);
+}
+
+TEST(LinkedClips, ARollNeedsANeighbourAfterEveryMember) {
+    LinkFixture fixture;
+    // Pull the audio's next clip away, leaving a gap after the sound only.
+    ASSERT_TRUE(fixture.document.move_clip(fixture.after, fixture.audio, 500).has_value());
+
+    const auto range = trim_range(fixture.document, fixture.b, TrimKind::roll);
+    ASSERT_TRUE(range.has_error()) << "a roll on one side only would desync the pair";
+    EXPECT_NE(range.error().to_string().find(to_string(fixture.sound)), std::string::npos)
+        << "the error must name the member with no neighbour: " << range.error().to_string();
+}
+
+TEST(LinkedClips, UndoRestoresEveryMemberAndEveryTrack) {
+    LinkFixture fixture;
+    const std::string before = serialise(fixture.document);
+    CommandStack stack;
+
+    for (const TrimKind kind : {TrimKind::ripple_in, TrimKind::ripple_out, TrimKind::roll,
+                                TrimKind::slip}) {
+        must_trim(fixture, stack, fixture.b, kind, 17);
+        EXPECT_NE(serialise(fixture.document), before) << to_string(kind);
+        ASSERT_TRUE(stack.undo(fixture.document).has_value());
+        EXPECT_EQ(serialise(fixture.document), before) << to_string(kind) << " did not undo";
+    }
+}
+
+TEST(LinkedClips, UnlinkingLetsTheMembersTrimSeparately) {
+    LinkFixture fixture;
+    const LinkId link = fixture.clip(fixture.b).link;
+    ASSERT_TRUE(link.is_valid());
+    ASSERT_TRUE(fixture.document.unlink(link).has_value());
+
+    CommandStack stack;
+    must_trim(fixture, stack, fixture.b, TrimKind::ripple_out, 20);
+    EXPECT_EQ(fixture.clip(fixture.b).duration, 120);
+    EXPECT_EQ(fixture.clip(fixture.sound).duration, 100) << "no longer linked";
+}
+
+TEST(LinkedClips, AnUnlockedTrackCanDesyncALinkAndThatIsTheUsersChoice) {
+    // Found by the fuzz, after a first draft of ADR 011 claimed drift was
+    // impossible by construction. It is not: a ripple upstream shifts sync-locked
+    // tracks, and a track the user unlocked deliberately stays put. Premiere
+    // behaves the same way, which is why it has an out-of-sync indicator --
+    // ReelForge has none yet (D18), so this is stated here rather than implied.
+    LinkFixture fixture;
+    ASSERT_TRUE(fixture.document.set_track_sync_locked(fixture.audio, false).has_value());
+
+    CommandStack stack;
+    must_trim(fixture, stack, fixture.a, TrimKind::ripple_out, 20);
+
+    EXPECT_EQ(fixture.clip(fixture.b).start, 120) << "the picture rippled with its own track";
+    EXPECT_EQ(fixture.clip(fixture.sound).start, 100) << "the audio stayed, as asked";
+}
+
+TEST(LinkedClips, ALaterTrimKeepsADesyncedPairsOffsetRatherThanAddingToIt) {
+    LinkFixture fixture;
+    ASSERT_TRUE(fixture.document.set_track_sync_locked(fixture.audio, false).has_value());
+    CommandStack stack;
+    must_trim(fixture, stack, fixture.a, TrimKind::ripple_out, 20);
+
+    const Ticks offset = fixture.clip(fixture.b).start - fixture.clip(fixture.sound).start;
+    ASSERT_EQ(offset, 20) << "sanity: the pair is now 20 ticks apart";
+
+    must_trim(fixture, stack, fixture.b, TrimKind::ripple_out, 10);
+    EXPECT_EQ(fixture.clip(fixture.b).duration, fixture.clip(fixture.sound).duration)
+        << "both members trimmed by the same 10";
+    EXPECT_EQ(fixture.clip(fixture.b).start - fixture.clip(fixture.sound).start, offset)
+        << "a trim must not add to an offset it did not create";
+}
+
+TEST(LinkedClips, AnUnlinkedClipIsAGroupOfOne) {
+    const Fixture fixture;
+    EXPECT_EQ(fixture.document.linked_clips(fixture.b), std::vector<ClipId>{fixture.b});
 }
 
 // --- planning ----------------------------------------------------------------

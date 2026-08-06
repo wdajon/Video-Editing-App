@@ -144,6 +144,68 @@ private:
     Ticks source_duration_;
 };
 
+/// Linking spends an id, so it goes through `CreatingCommand` for the same
+/// reason `AddClip` does: a redo must reuse the id it issued the first time, and
+/// an undo must give the counter back.
+class LinkClipsCommand final : public CreatingCommand {
+public:
+    explicit LinkClipsCommand(std::vector<ClipId> clips) : clips_(std::move(clips)) {}
+
+    [[nodiscard]] std::string_view name() const noexcept override { return "Link Clips"; }
+
+protected:
+    [[nodiscard]] Result<void> create_first_time(Document& document) override {
+        Result<LinkId> link = document.link_clips(clips_);
+        if (!link) {
+            return link.error();
+        }
+        link_ = link.value();
+        return ok();
+    }
+
+    [[nodiscard]] Result<void> recreate(Document& document) override {
+        return document.relink(link_, clips_);
+    }
+
+    [[nodiscard]] Result<void> destroy(Document& document) override {
+        return document.unlink(link_);
+    }
+
+private:
+    std::vector<ClipId> clips_;
+    LinkId link_;
+};
+
+/// Unlinking records who was in the group, because the inverse has to put the
+/// same clips back under the same id -- a relink of a different set would
+/// serialise identically for the members it happened to get right.
+class UnlinkClipsCommand final : public Command {
+public:
+    explicit UnlinkClipsCommand(LinkId link) : link_(link) {}
+
+    [[nodiscard]] std::string_view name() const noexcept override { return "Unlink Clips"; }
+
+    [[nodiscard]] Result<void> apply(Document& document) override {
+        members_.clear();
+        for (const Track& track : document.tracks()) {
+            for (const Clip& clip : track.clips) {
+                if (clip.link == link_) {
+                    members_.push_back(clip.id);
+                }
+            }
+        }
+        return document.unlink(link_);
+    }
+
+    [[nodiscard]] Result<void> revert(Document& document) override {
+        return document.relink(link_, members_);
+    }
+
+private:
+    std::vector<ClipId> members_;
+    LinkId link_;
+};
+
 /// Removal captures the whole object *and* where it sat, because restoring a
 /// track at the wrong index changes the render order, and restoring a clip
 /// without its flags loses user state. Both would pass a shallow check.
@@ -479,6 +541,14 @@ std::unique_ptr<Command> make_set_track_muted(TrackId id, bool muted) {
 
 std::unique_ptr<Command> make_set_track_locked(TrackId id, bool locked) {
     return std::make_unique<SetTrackLockedCommand>(id, locked);
+}
+
+std::unique_ptr<Command> make_link_clips(std::vector<ClipId> clips) {
+    return std::make_unique<LinkClipsCommand>(std::move(clips));
+}
+
+std::unique_ptr<Command> make_unlink_clips(LinkId link) {
+    return std::make_unique<UnlinkClipsCommand>(link);
 }
 
 std::unique_ptr<Command> make_set_track_sync_locked(TrackId id, bool sync_locked) {

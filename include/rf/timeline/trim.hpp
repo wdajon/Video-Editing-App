@@ -90,6 +90,9 @@ struct TrimRange {
 
 /// A trim as an undoable command.
 ///
+/// Applies to every member of `clip`'s link group, which is what keeps a picture
+/// and its audio together (ADR 011). An unlinked clip is a group of one.
+///
 /// `delta` is clamped to the reachable range, as Premiere does -- a trim runs as
 /// far as it can rather than refusing wholesale. A request that clamps to zero
 /// fails, so it never becomes an undo entry for an edit that did not happen.

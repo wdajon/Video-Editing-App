@@ -78,7 +78,45 @@ Document random_document(std::mt19937_64& random) {
             EXPECT_TRUE(document.set_track_sync_locked(track, false).has_value());
         }
     }
+
+    // Independently laid out tracks essentially never produce two clips with the
+    // same span, so a linked pair has to be built on purpose: take a clip from
+    // the first track and lay its counterpart on another track at the same span.
+    // Whichever attempts collide with existing clips are simply skipped.
+    const TrackId first = document.tracks().front().id;
+    const std::size_t attempts = 1 + (random() % 3);
+    for (std::size_t attempt = 0; attempt < attempts; ++attempt) {
+        const std::vector<Clip>& clips = document.find_track(first)->clips;
+        const Clip& picture = clips[random() % clips.size()];
+        if (picture.link.is_valid()) {
+            continue;
+        }
+        const ClipId picture_id = picture.id;
+        const Ticks start = picture.start;
+        const Ticks duration = picture.duration;
+        const TrackId other = document.tracks()[1 + (random() % (document.tracks().size() - 1))].id;
+
+        const auto sound = document.add_clip(other, "linked.wav", 0, start, duration,
+                                             duration + static_cast<Ticks>(random() % 200));
+        if (!sound) {
+            continue;  // the span is occupied on that track
+        }
+        EXPECT_TRUE(document.link_clips({picture_id, sound.value()}).has_value());
+    }
     return document;
+}
+
+/// The tracks holding a member of `clip`'s link group.
+std::vector<TrackId> member_tracks(const Document& document, ClipId clip) {
+    std::vector<TrackId> tracks;
+    for (const ClipId member : document.linked_clips(clip)) {
+        tracks.push_back(document.track_of_clip(member)->id);
+    }
+    return tracks;
+}
+
+bool holds_member(const std::vector<TrackId>& tracks, TrackId id) {
+    return std::find(tracks.begin(), tracks.end(), id) != tracks.end();
 }
 
 /// Everything a trim might be asked to preserve, gathered in one place.
@@ -143,13 +181,16 @@ void check_document_is_legal(const Document& document) {
 /// track and left another one behind satisfies every per-track check above and
 /// still silently desyncs the edit.
 void check_sync_locked_tracks_kept_step(const std::vector<Track>& before, const Document& after,
-                                        TrackId trimmed, ClipId id, Ticks point) {
+                                        const std::vector<TrackId>& members, ClipId id,
+                                        Ticks point) {
     const Clip* now = after.find_clip(id);
     ASSERT_NE(now, nullptr);
     const Ticks shift = (now->start + now->duration) - point;
 
     for (const Track& was : before) {
-        if (was.id == trimmed) {
+        // A member's track was trimmed, not shifted, so it is not a bystander
+        // and this check does not apply to it.
+        if (holds_member(members, was.id)) {
             continue;
         }
         const Track* is_now = after.find_track(was.id);
@@ -165,6 +206,41 @@ void check_sync_locked_tracks_kept_step(const std::vector<Track>& before, const 
             EXPECT_EQ(moved->duration, clip.duration) << "sync lock shifts, it never trims";
             EXPECT_EQ(moved->source_in, clip.source_in);
         }
+    }
+}
+
+/// The invariant D16 exists for: a trim moves every member of a link by the same
+/// amounts, so it never introduces drift.
+///
+/// Stated as deltas rather than as absolute alignment, and the difference is not
+/// pedantry -- the first version of this check asserted that members share a
+/// span, and the fuzz refuted it. A ripple elsewhere shifts sync-locked tracks;
+/// if a link has its picture on the rippled track and its audio on a track whose
+/// sync lock the user turned off, the pair legitimately comes apart. Trims must
+/// not *add* to that offset, which is what this asserts. See ADR 011.
+void check_link_members_moved_together(const std::vector<Clip>& before, const Document& after,
+                                       ClipId clip, TrimKind kind) {
+    const std::vector<ClipId> group = after.linked_clips(clip);
+    const Clip* was_first = find(before, group.front());
+    const Clip* now_first = after.find_clip(group.front());
+    ASSERT_NE(was_first, nullptr);
+    ASSERT_NE(now_first, nullptr);
+
+    const Ticks moved = now_first->start - was_first->start;
+    const Ticks resized = now_first->duration - was_first->duration;
+    const Ticks slipped = now_first->source_in - was_first->source_in;
+
+    for (const ClipId id : group) {
+        const Clip* was = find(before, id);
+        const Clip* now = after.find_clip(id);
+        ASSERT_NE(was, nullptr);
+        ASSERT_NE(now, nullptr);
+        EXPECT_EQ(now->start - was->start, moved)
+            << to_string(kind) << ": clip " << id.value() << " moved a different distance";
+        EXPECT_EQ(now->duration - was->duration, resized)
+            << to_string(kind) << ": clip " << id.value() << " was trimmed by a different amount";
+        EXPECT_EQ(now->source_in - was->source_in, slipped)
+            << to_string(kind) << ": clip " << id.value() << " took a different part of its source";
     }
 }
 
@@ -262,6 +338,7 @@ TEST(TrimFuzz, RandomTrimsNeverLeaveAnIllegalDocumentAndAlwaysUndo) {
     // about ADR 010. Both of these are asserted non-zero at the end.
     int crossed_tracks = 0;
     int straddle_refusals = 0;
+    int linked_trims = 0;
 
     for (int seed = 0; seed < kDocuments; ++seed) {
         std::mt19937_64 random(0x517cc1b727220a95ULL + static_cast<std::uint64_t>(seed));
@@ -282,6 +359,7 @@ TEST(TrimFuzz, RandomTrimsNeverLeaveAnIllegalDocumentAndAlwaysUndo) {
 
             const Snapshot before = snapshot(document, track_id);
             const std::vector<Track> all_before = document.tracks();
+            const std::vector<TrackId> members = member_tracks(document, id);
             const auto result = stack.execute(document, make_trim(id, kind, delta));
             if (!result) {
                 ++refused;
@@ -293,8 +371,16 @@ TEST(TrimFuzz, RandomTrimsNeverLeaveAnIllegalDocumentAndAlwaysUndo) {
                 continue;
             }
             ++applied;
+            if (members.size() > 1) {
+                ++linked_trims;
+                std::vector<Clip> clips_before;
+                for (const Track& was : all_before) {
+                    clips_before.insert(clips_before.end(), was.clips.begin(), was.clips.end());
+                }
+                check_link_members_moved_together(clips_before, document, id, kind);
+            }
             for (const Track& was : all_before) {
-                if (was.id != track_id && *document.find_track(was.id) != was) {
+                if (!holds_member(members, was.id) && *document.find_track(was.id) != was) {
                     ++crossed_tracks;
                     break;
                 }
@@ -305,11 +391,11 @@ TEST(TrimFuzz, RandomTrimsNeverLeaveAnIllegalDocumentAndAlwaysUndo) {
             check_operation_preserved_what_it_should(kind, id, before, after);
             if (kind == TrimKind::ripple_in || kind == TrimKind::ripple_out) {
                 check_ripple_moved_the_tail_rigidly(id, before, after);
-                check_sync_locked_tracks_kept_step(all_before, document, track_id, id, point);
+                check_sync_locked_tracks_kept_step(all_before, document, members, id, point);
             } else {
-                // Roll, slip and slide never reach another track at all.
+                // Roll, slip and slide never reach a track that holds no member.
                 for (const Track& was : all_before) {
-                    if (was.id != track_id) {
+                    if (!holds_member(members, was.id)) {
                         EXPECT_EQ(*document.find_track(was.id), was)
                             << to_string(kind) << " moved a track it has no business touching";
                     }
@@ -333,8 +419,9 @@ TEST(TrimFuzz, RandomTrimsNeverLeaveAnIllegalDocumentAndAlwaysUndo) {
     EXPECT_GT(crossed_tracks, 0) << "no ripple ever moved a sync-locked track; ADR 010 untested";
     EXPECT_GT(straddle_refusals, 0)
         << "no ripple ever met a clip across the ripple point; the refusal path is untested";
-    std::printf("[trim fuzz] documents=%d applied=%d refused=%d crossed=%d straddled=%d\n",
-                kDocuments, applied, refused, crossed_tracks, straddle_refusals);
+    EXPECT_GT(linked_trims, 0) << "no trim ever landed on a linked clip; ADR 011 untested";
+    std::printf("[trim fuzz] documents=%d applied=%d refused=%d crossed=%d straddled=%d linked=%d\n",
+                kDocuments, applied, refused, crossed_tracks, straddle_refusals, linked_trims);
 }
 
 }  // namespace

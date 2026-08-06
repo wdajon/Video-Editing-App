@@ -30,7 +30,9 @@ namespace rf::timeline {
 /// have a safe default -- Premiere's default is on, and so is ours -- so a
 /// reader could widen a v2 file. The version still moves: a field that appears
 /// in the bytes changes them, and byte-identity is the whole undo gate.
-inline constexpr int kProjectFormatVersion = 3;
+///
+/// Version 4 added `link` to the clip record (ADR 011).
+inline constexpr int kProjectFormatVersion = 4;
 
 /// Serialises `document` canonically.
 ///

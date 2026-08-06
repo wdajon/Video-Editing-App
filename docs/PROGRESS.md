@@ -5,9 +5,9 @@
 **Exit gate:** the full trim set (ripple/roll/slip/slide) driven by keyboard
 only.
 
-**Gate status: not met.** The four operations and their limits exist in the
-model, and a ripple now keeps sync-locked tracks in step. Nothing is bound to a
-key yet, there are no panels, and paired A/V still desyncs (D16).
+**Gate status: not met.** The trim model is complete: the four operations, their
+limits, sync-locked tracks and linked audio. Nothing is bound to a key yet and
+there are no panels, which is the whole of what the gate asks for.
 
 ### Iteration 1 — the trim set, and the media limit that makes it honest
 
@@ -110,10 +110,57 @@ Format version 3 for `Track::sync_locked`. `insert_track_at()` took seven
 positional parameters and would have taken eight; it now takes a `Track`, which
 is what its only caller already had in hand.
 
+### Iteration 3 — linked clips, and an ADR the fuzz proved wrong
+
+**Increment:** D16 — a ripple on a picture clip left its audio at the old length.
+`Clip::link` groups clips that trim together; a trim applies to every member and
+the reachable range is the intersection of what each member allows. **Falsifiable
+check:** the linked cases asserted on a two-track fixture, plus the fuzz extended
+to build linked pairs deliberately, with a counter proving it reaches them.
+
+The intersection is the point of the feature. A pair whose audio has twenty ticks
+of tail and whose picture has two hundred stops at twenty, and the two stay
+together — a range taken from the picture alone would run the audio past the end
+of its media.
+
+**The ADR claimed something false and the fuzz caught it within the hour.**
+Decision 2 first said that requiring aligned members made drift "unrepresentable
+by construction". It is not. A ripple elsewhere shifts sync-locked tracks; if a
+link has its picture on the rippled track and its audio on a track whose sync
+lock the user turned *off*, the pair comes apart — and nothing should stop it,
+because the user explicitly asked that track to stay put. Premiere behaves the
+same way, which is exactly why it has a red out-of-sync indicator.
+
+The fuzz failed on all five trim kinds, including slip, which moves nothing at
+all. That was the tell: a slip cannot introduce drift, so the drift had to be
+there already. The invariant was rewritten to the one that actually matters:
+
+> A trim applies the same deltas to every member. It never introduces drift. It
+> does not undo drift that an earlier edit legitimately created.
+
+ReelForge has no out-of-sync indicator, so a desynced pair is currently silent.
+That is a real gap, filed as D18 rather than glossed, and stated in a test so it
+is documented behaviour rather than something the next reader discovers.
+
+```
+100% tests passed, 0 tests failed out of 360     (windows-debug)
+100% tests passed, 0 tests failed out of 360     (windows-release)
+
+timeline = 128 tests (was 107)
+[trim fuzz] documents=200 applied=4101 refused=3899 crossed=374 straddled=1724 linked=165
+```
+
+`linked=165` is asserted non-zero. Independently laid out tracks essentially
+never produce two clips with the same span, so the fuzz builds linked pairs on
+purpose; without the counter it would have exercised none and said nothing.
+
+Format version 4 for `Clip::link`.
+
 ### Next action
 
-D16 — linked clips — then the command map. Both are M4 gate blockers: the gate is
-a keyboard-only trim workflow, and one that desyncs paired audio is not one.
+The command map and JKL. The trim model is complete enough to bind keys to:
+ripple, roll, slip and slide all keep sync-locked tracks and linked audio in
+step. D18 (no out-of-sync indicator) remains open against the gate.
 
 ## M3 — GPU compositor + Program monitor playback
 

@@ -82,6 +82,8 @@ std::string serialise(const Document& document) {
             out.push_back(' ');
             out.append(std::to_string(clip.duration));
             out.push_back(' ');
+            out.append(std::to_string(clip.link.value()));
+            out.push_back(' ');
             append_flag(out, clip.enabled);
             out.push_back(' ');
             append_quoted(out, clip.source);

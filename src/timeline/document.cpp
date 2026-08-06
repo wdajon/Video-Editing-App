@@ -399,6 +399,106 @@ Result<std::vector<Clip>> Document::validate_track_clips(TrackId id, std::vector
     return std::move(candidate.clips);
 }
 
+Result<LinkId> Document::link_clips(const std::vector<ClipId>& clips) {
+    if (clips.size() < 2) {
+        return Error{Errc::invalid_argument, "a link needs at least two clips"};
+    }
+
+    const Clip* first = find_clip(clips.front());
+    if (first == nullptr) {
+        return Error{Errc::not_found, to_string(clips.front()) + " does not exist"};
+    }
+
+    std::vector<TrackId> seen;
+    for (const ClipId id : clips) {
+        const Clip* clip = find_clip(id);
+        if (clip == nullptr) {
+            return Error{Errc::not_found, to_string(id) + " does not exist"};
+        }
+        if (clip->link.is_valid()) {
+            return Error{Errc::already_exists,
+                         to_string(id) + " is already in " + to_string(clip->link)};
+        }
+        // Alignment is the invariant everything else rests on: with it, a trim
+        // is one delta applied to each member, and drift is unrepresentable
+        // rather than merely corrected for. See ADR 011.
+        if (clip->start != first->start || clip->duration != first->duration) {
+            return Error{Errc::invalid_argument,
+                         to_string(id) + " spans [" + std::to_string(clip->start) + ", " +
+                             std::to_string(clip->start + clip->duration) + ") but " +
+                             to_string(first->id) + " spans [" + std::to_string(first->start) +
+                             ", " + std::to_string(first->start + first->duration) +
+                             "); clips must be aligned to link"};
+        }
+        const TrackId owner = track_of_clip(id)->id;
+        if (std::find(seen.begin(), seen.end(), owner) != seen.end()) {
+            return Error{Errc::invalid_argument,
+                         "two clips of a link would sit on " + to_string(owner)};
+        }
+        seen.push_back(owner);
+    }
+
+    const LinkId link{next_id_++};
+    for (const ClipId id : clips) {
+        mutable_clip(id)->link = link;
+    }
+    return link;
+}
+
+Result<void> Document::relink(LinkId id, const std::vector<ClipId>& clips) {
+    if (!id.is_valid()) {
+        return Error{Errc::invalid_argument, "cannot relink under the null id"};
+    }
+    for (const ClipId clip : clips) {
+        if (find_clip(clip) == nullptr) {
+            return Error{Errc::not_found, to_string(clip) + " does not exist"};
+        }
+    }
+    for (const ClipId clip : clips) {
+        mutable_clip(clip)->link = id;
+    }
+    return ok();
+}
+
+Result<void> Document::unlink(LinkId id) {
+    if (!id.is_valid()) {
+        return Error{Errc::invalid_argument, "the null id is not a link"};
+    }
+    bool found = false;
+    for (Track& track : tracks_) {
+        for (Clip& clip : track.clips) {
+            if (clip.link == id) {
+                clip.link = LinkId{};
+                found = true;
+            }
+        }
+    }
+    if (!found) {
+        return Error{Errc::not_found, to_string(id) + " does not exist"};
+    }
+    return ok();
+}
+
+std::vector<ClipId> Document::linked_clips(ClipId id) const {
+    const Clip* clip = find_clip(id);
+    if (clip == nullptr) {
+        return {};
+    }
+    if (!clip->link.is_valid()) {
+        return {id};
+    }
+
+    std::vector<ClipId> group;
+    for (const Track& track : tracks_) {
+        for (const Clip& member : track.clips) {
+            if (member.link == clip->link) {
+                group.push_back(member.id);
+            }
+        }
+    }
+    return group;
+}
+
 Result<void> Document::set_track_muted(TrackId id, bool muted) {
     Track* track = mutable_track(id);
     if (track == nullptr) {

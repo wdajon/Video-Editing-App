@@ -41,15 +41,23 @@ private:
 
 struct ClipTag {};
 struct TrackTag {};
+struct LinkTag {};
 
 using ClipId = Id<ClipTag>;
 using TrackId = Id<TrackTag>;
+/// Identifies a group of clips that trim together -- the picture and its audio.
+/// Issued from the same counter as every other id, so ADR 005's rules about
+/// reuse and undo apply to it unchanged. See docs/adr/011-linked-clips.md.
+using LinkId = Id<LinkTag>;
 
 [[nodiscard]] inline std::string to_string(ClipId id) {
     return "clip#" + std::to_string(id.value());
 }
 [[nodiscard]] inline std::string to_string(TrackId id) {
     return "track#" + std::to_string(id.value());
+}
+[[nodiscard]] inline std::string to_string(LinkId id) {
+    return "link#" + std::to_string(id.value());
 }
 
 }  // namespace rf::timeline
