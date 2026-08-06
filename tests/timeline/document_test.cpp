@@ -335,11 +335,7 @@ TEST(Document, InsertTrackAtRestoresPosition) {
 
     auto removed = document.remove_track(second);
     ASSERT_TRUE(removed.has_value());
-    ASSERT_TRUE(document
-                    .insert_track_at(1, removed.value().id, removed.value().kind,
-                                     removed.value().name, removed.value().muted,
-                                     removed.value().locked, removed.value().clips)
-                    .has_value());
+    ASSERT_TRUE(document.insert_track_at(1, removed.value()).has_value());
 
     ASSERT_EQ(document.tracks().size(), 3u);
     EXPECT_EQ(document.tracks()[0].id, first);

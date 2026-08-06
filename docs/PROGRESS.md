@@ -5,8 +5,9 @@
 **Exit gate:** the full trim set (ripple/roll/slip/slide) driven by keyboard
 only.
 
-**Gate status: not met.** Iteration 1 delivers the four operations and their
-limits in the model. Nothing is bound to a key yet, and there are no panels.
+**Gate status: not met.** The four operations and their limits exist in the
+model, and a ripple now keeps sync-locked tracks in step. Nothing is bound to a
+key yet, there are no panels, and paired A/V still desyncs (D16).
 
 ### Iteration 1 — the trim set, and the media limit that makes it honest
 
@@ -64,9 +65,55 @@ RepresentableLimitDoesNotOverflow` covers the case that used to be UB.
 3. **Media length lives on the clip** (D14), not in a media pool, so two clips
    cut from one source repeat the value with nothing enforcing that they agree.
 
+### Iteration 2 — sync lock, and a defect report that was half wrong
+
+**Increment:** D15 — a ripple moved only its own track, leaving downstream
+material on every other track behind. **Falsifiable check:** the sync-lock cases
+asserted exactly on a two-track fixture, plus the fuzz extended to multi-track
+documents with a counter proving it actually crosses a track boundary rather
+than merely being able to.
+
+**Checking the ground truth before implementing changed the design.** D15 was
+written as *"a ripple on V1 leaves the paired A1 clip behind"*. Adobe's
+documentation shows that sentence conflates two features. Sync lock moves
+*downstream material on other tracks* — the music bed, the lower third — and
+never trims anything. The paired A1 clip is **clip linking**, which ReelForge
+does not have. Building linking under sync lock's name would have produced
+something that looked finished and still lost sync. D15 is resolved for what it
+actually described; the other half is now D16, and ADR 010 records the
+distinction so the next session does not read D15 as closing both.
+
+The straddling case turned out to be genuinely hard rather than an oversight: a
+clip spanning the ripple point cannot move and cannot stay. Premiere only
+answered it recently, with an opt-in preference that *splits* the clip. ReelForge
+refuses and names the obstruction, because the alternative — shifting around it —
+is the silent desync this iteration exists to remove. The split is D17.
+
+```
+100% tests passed, 0 tests failed out of 339     (windows-debug)
+100% tests passed, 0 tests failed out of 339     (windows-release)
+
+timeline = 107 tests (was 95)
+[trim fuzz] documents=200 applied=4237 refused=3763 crossed=319 straddled=1756
+```
+
+`crossed=319` and `straddled=1756` are asserted non-zero. Without them a
+multi-track fuzz that never actually crossed a boundary would look identical to
+the single-track one it replaced and would prove nothing about ADR 010.
+
+The ripple point is the trimmed clip's **out point for both edges**, which is not
+obvious for the in edge and is derived in ADR 010. One rule for both matters:
+two ripple points differing by the clip's duration would show up as a silent
+frame-level drift on other tracks rather than as an error.
+
+Format version 3 for `Track::sync_locked`. `insert_track_at()` took seven
+positional parameters and would have taken eight; it now takes a `Track`, which
+is what its only caller already had in hand.
+
 ### Next action
 
-D15: sync-locked ripple across tracks, then the command map.
+D16 — linked clips — then the command map. Both are M4 gate blockers: the gate is
+a keyboard-only trim workflow, and one that desyncs paired audio is not one.
 
 ## M3 — GPU compositor + Program monitor playback
 
