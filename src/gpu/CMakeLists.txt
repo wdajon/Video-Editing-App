@@ -16,6 +16,7 @@ add_library(rf_gpu STATIC
     device_info.cpp
     image.cpp
     instance.cpp
+    swapchain.cpp
     texture.cpp
     device_impl.hpp
     instance_impl.hpp
@@ -27,6 +28,7 @@ add_library(rf_gpu STATIC
     "${PROJECT_SOURCE_DIR}/include/rf/gpu/device_info.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/gpu/image.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/gpu/instance.hpp"
+    "${PROJECT_SOURCE_DIR}/include/rf/gpu/swapchain.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/gpu/texture.hpp")
 
 add_library(rf::gpu ALIAS rf_gpu)

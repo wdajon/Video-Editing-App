@@ -56,6 +56,10 @@ private:
     std::unique_ptr<Impl> impl_;
 
     friend class Compositor;
+
+    // Presentation copies this texture into an acquired swapchain image, so it
+    // needs the underlying VkImage and its layout state.
+    friend class Swapchain;
 };
 
 }  // namespace rf::gpu

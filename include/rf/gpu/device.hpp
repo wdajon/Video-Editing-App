@@ -59,6 +59,7 @@ private:
     friend class Compositor;
 
     friend class Texture;
+    friend class Swapchain;
 };
 
 }  // namespace rf::gpu
