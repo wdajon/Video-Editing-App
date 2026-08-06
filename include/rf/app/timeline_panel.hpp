@@ -11,6 +11,8 @@
 #include <QString>
 #include <QWidget>
 
+#include <cstdint>
+
 #include "rf/edit/command_map.hpp"
 #include "rf/edit/editor.hpp"
 #include "rf/timeline/command.hpp"
@@ -28,6 +30,12 @@ public:
 
     [[nodiscard]] const edit::EditState& edit_state() const noexcept { return state_; }
 
+    /// Where the playhead is drawn, in frames. The window drives this from the
+    /// transport as the clock advances; the panel does not own a timer, so a
+    /// test can place the playhead exactly instead of waiting for one.
+    void set_playhead_frame(std::int64_t frame);
+    [[nodiscard]] std::int64_t playhead_frame() const noexcept { return playhead_frame_; }
+
     /// The message from the last refused action, or empty. A keyboard-only user
     /// pressing a trim key at the media limit has to be told why nothing moved,
     /// and a modal dialog on every refused keystroke would be unusable.
@@ -37,6 +45,10 @@ Q_SIGNALS:
     /// Emitted after any key that changed something, so the window can retitle
     /// itself and any other panel can refresh.
     void document_changed();
+
+    /// Emitted when a key moved the shuttle, so the window can apply the new
+    /// rate to the transport. The panel does not own the clock.
+    void shuttle_changed();
 
     /// Emitted for a refused action, with the reason. Empty when an action
     /// succeeds, so a status bar clears itself rather than showing a stale
@@ -53,6 +65,7 @@ private:
     edit::EditState& state_;
     const edit::CommandMap& map_;
     QString last_message_;
+    std::int64_t playhead_frame_ = 0;
 };
 
 }  // namespace rf::app

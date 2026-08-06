@@ -6,10 +6,15 @@
 #include <QMainWindow>
 #include <QString>
 #include <QStringList>
+#include <QTimer>
 
+#include <memory>
+
+#include "rf/app/transport.hpp"
 #include "rf/core/result.hpp"
 #include "rf/edit/command_map.hpp"
 #include "rf/edit/editor.hpp"
+#include "rf/playback/clock.hpp"
 #include "rf/timeline/command.hpp"
 #include "rf/timeline/document.hpp"
 
@@ -41,6 +46,13 @@ public:
     [[nodiscard]] timeline::Document& document() noexcept { return document_; }
     [[nodiscard]] edit::EditState& edit_state() noexcept { return edit_state_; }
     [[nodiscard]] TimelinePanel* timeline_panel() const noexcept { return timeline_panel_; }
+    [[nodiscard]] Transport& transport() noexcept { return *transport_; }
+
+    /// Reads the transport and moves the drawn playhead. Called on a timer while
+    /// the shuttle runs, and directly by tests, which is why it is not private:
+    /// a playhead that only a timer can move cannot be asserted on without
+    /// waiting for one.
+    void refresh_playhead(playback::Nanoseconds now);
 
     // --- workspaces ----------------------------------------------------------
     // A workspace is Qt's own dock layout under a name. ReelForge does not
@@ -70,6 +82,11 @@ private:
     edit::EditState edit_state_;
     edit::CommandMap command_map_;
     TimelinePanel* timeline_panel_ = nullptr;
+    /// By pointer because Transport has no default constructor -- it is built
+    /// through a Result, since a frame rate can be refused.
+    std::unique_ptr<Transport> transport_;
+    playback::SteadyClock wall_clock_;
+    QTimer* playhead_timer_ = nullptr;
     QHash<QString, QByteArray> workspaces_;
 
     QString project_path_;

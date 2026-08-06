@@ -68,7 +68,19 @@ void TimelinePanel::keyPressEvent(QKeyEvent* event) {
     last_message_.clear();
     Q_EMIT status_message(QString{});
     Q_EMIT document_changed();
+    // The window owns the clock, so a shuttle key is reported rather than
+    // applied here. Emitted unconditionally on success: working out whether a
+    // key was a shuttle key would duplicate the command map's job.
+    Q_EMIT shuttle_changed();
     event->accept();
+    update();
+}
+
+void TimelinePanel::set_playhead_frame(std::int64_t frame) {
+    if (frame == playhead_frame_) {
+        return;
+    }
+    playhead_frame_ = frame;
     update();
 }
 
@@ -106,6 +118,16 @@ void TimelinePanel::paintEvent(QPaintEvent* event) {
             }
         }
         y += kTrackHeight + kTrackGap;
+    }
+
+    // The playhead, drawn last so it sits over the clips. This is what JKL
+    // moves: the shuttle sets a rate, the clock turns wall time into a frame,
+    // and the frame lands here.
+    const timeline::Ticks playhead_tick = playhead_frame_ * document_.ticks_per_frame();
+    const int playhead_x = tick_to_x(playhead_tick, width());
+    if (playhead_x >= kHeaderWidth && playhead_x < width()) {
+        painter.fillRect(QRect(playhead_x, 0, 2, std::max(y, height())),
+                         palette().color(QPalette::BrightText));
     }
 }
 

@@ -5,11 +5,13 @@ add_library(rf_app STATIC
     main_window.cpp
     program_monitor.cpp
     timeline_panel.cpp
+    transport.cpp
     window_title.cpp
     "${PROJECT_SOURCE_DIR}/include/rf/app/key_translation.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/app/main_window.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/app/program_monitor.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/app/timeline_panel.hpp"
+    "${PROJECT_SOURCE_DIR}/include/rf/app/transport.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/app/window_title.hpp")
 
 add_library(rf::app ALIAS rf_app)

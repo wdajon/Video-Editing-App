@@ -12,6 +12,7 @@
 #include "rf/edit/action.hpp"
 #include "rf/edit/command_map.hpp"
 #include "rf/edit/key.hpp"
+#include "rf/edit/shuttle.hpp"
 #include "rf/timeline/command.hpp"
 #include "rf/timeline/document.hpp"
 #include "rf/timeline/trim.hpp"
@@ -25,11 +26,10 @@ struct EditState {
     timeline::ClipId clip;    ///< Null until something is selected.
     Edge edge = Edge::out;    ///< Which end of `clip` a ripple or roll moves.
 
-    // There is no playhead here yet. Nothing in this layer reads one: the trim
-    // keys work from the selection, and the actions that need a playhead --
-    // Premiere's Q and W, ripple trim to the playhead -- are not implemented. A
-    // field written by selection and read by nothing would look like state and
-    // behave like decoration.
+    /// The JKL transport. `Editor` moves it; the application layer applies its
+    /// rate to a playback clock, which is what keeps `rf_edit` free of any
+    /// dependency on playback. See docs/adr/014-jkl-shuttle.md.
+    Shuttle shuttle;
 
     /// Frames a "many" trim moves. Premiere's default is 5, and it is a user
     /// preference there too -- so it lives here rather than as a literal in the
