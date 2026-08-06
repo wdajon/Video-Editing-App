@@ -1,0 +1,60 @@
+// The Timeline panel: tracks, clips, and the keyboard.
+//
+// The one panel this milestone ships, because it is the only one with something
+// to draw (ADR 013). It owns nothing -- the document, the undo stack, the edit
+// state and the command map all belong to the window -- which is what lets a
+// test build a panel around its own document and drive it with real key events.
+
+#ifndef RF_APP_TIMELINE_PANEL_HPP
+#define RF_APP_TIMELINE_PANEL_HPP
+
+#include <QString>
+#include <QWidget>
+
+#include "rf/edit/command_map.hpp"
+#include "rf/edit/editor.hpp"
+#include "rf/timeline/command.hpp"
+#include "rf/timeline/document.hpp"
+
+namespace rf::app {
+
+class TimelinePanel : public QWidget {
+    Q_OBJECT
+
+public:
+    TimelinePanel(timeline::Document& document, timeline::CommandStack& stack,
+                  edit::EditState& state, const edit::CommandMap& map,
+                  QWidget* parent = nullptr);
+
+    [[nodiscard]] const edit::EditState& edit_state() const noexcept { return state_; }
+
+    /// The message from the last refused action, or empty. A keyboard-only user
+    /// pressing a trim key at the media limit has to be told why nothing moved,
+    /// and a modal dialog on every refused keystroke would be unusable.
+    [[nodiscard]] const QString& last_message() const noexcept { return last_message_; }
+
+Q_SIGNALS:
+    /// Emitted after any key that changed something, so the window can retitle
+    /// itself and any other panel can refresh.
+    void document_changed();
+
+    /// Emitted for a refused action, with the reason. Empty when an action
+    /// succeeds, so a status bar clears itself rather than showing a stale
+    /// complaint about a key pressed several edits ago.
+    void status_message(const QString& message);
+
+protected:
+    void keyPressEvent(QKeyEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
+
+private:
+    timeline::Document& document_;
+    timeline::CommandStack& stack_;
+    edit::EditState& state_;
+    const edit::CommandMap& map_;
+    QString last_message_;
+};
+
+}  // namespace rf::app
+
+#endif  // RF_APP_TIMELINE_PANEL_HPP

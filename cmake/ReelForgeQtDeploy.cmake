@@ -45,6 +45,34 @@ function(rf_deploy_qt_offscreen_platform target)
         VERBATIM)
 endfunction()
 
+# rf_deploy_qt_module(<target> <Qt6::Module>)
+#
+# Copies one Qt shared library next to <target>.
+#
+# windeployqt is run against exactly one target per output directory (see above),
+# and it deploys what *that* target links. A second binary in the same directory
+# linking a Qt module the deployed one does not -- rf_app_tests linking Qt6::Test,
+# which reelforge has no business linking -- gets a runnable-looking executable
+# that dies at startup with no output. Copying the one extra library is narrower
+# than a second windeployqt run, and cannot race with the first because
+# windeployqt never writes this file.
+function(rf_deploy_qt_module target module)
+    if(NOT WIN32)
+        # Elsewhere the build-tree RPATH already resolves Qt.
+        return()
+    endif()
+
+    if(NOT TARGET ${module})
+        message(FATAL_ERROR "${module} is not available, so ${target} cannot start.")
+    endif()
+
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "$<TARGET_FILE:${module}>" "$<TARGET_FILE_DIR:${target}>/"
+        COMMENT "Deploying ${module} for ${target}"
+        VERBATIM)
+endfunction()
+
 function(rf_deploy_qt target)
     if(NOT WIN32)
         return()

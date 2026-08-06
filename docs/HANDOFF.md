@@ -16,7 +16,7 @@ Repository: https://github.com/wdajon/Video-Editing-App (public)
 | M1 — probe, decode, frame-accurate seek | **Gate met.** 200/200 random seeks correct on a 10-min 4K file. Performance budget **not** met — see D9. |
 | M2 — timeline model + undo/redo | **Gate met.** 10,000-operation fuzz, undo returns byte-identical. |
 | M3 — GPU compositor + playback | **Gate met** 2026-08-05. 1800 frames presented, 0 dropped, p99 36.67 ms, confirmed visually by the project owner. See the caveats in `PROGRESS.md`. |
-| M4 — panels, docking, workspaces, JKL | **In progress, iteration 4 of 5.** Trim model complete, and reachable from key chords through `rf_edit` (ADR 009–012), verified headless. No window wiring, no panels, no JKL. |
+| M4 — panels, docking, workspaces, JKL | **Iteration 5 of 5. Gate met mechanically on Windows** — the full trim set driven by `QTest::keyClick` on a real docked panel (ADR 009–013). **Not confirmed by CI** (Actions outage) and **not seen by anyone**. JKL absent (D21). |
 | M5 onward | Not started. |
 
 Zero warnings at `/W4 /WX` and `-Wall -Wextra -Werror`.
@@ -31,9 +31,15 @@ fact. Get the number from the suite:
 ctest --preset windows-debug
 ```
 
-At M4 iteration 4 (2026-08-06) that was **403**: core 48, media 92, timeline 130,
-edit 41, gpu 42, playback 40, app 10. Treat it as a dated snapshot, not a claim
+At M4 iteration 5 (2026-08-06) that was **425**: core 48, media 92, timeline 130,
+edit 41, gpu 42, playback 40, app 32. Treat it as a dated snapshot, not a claim
 about now.
+
+**Two things are outstanding and a fresh session must not read past them.** CI
+has never run against M4 iterations 4 or 5 — GitHub Actions was in a major
+outage — so that code has only ever been compiled by MSVC, with no Linux, Clang,
+ASan, UBSan or TSan coverage. And nobody has looked at the Timeline panel; its
+painting has no oracle (D23), exactly as presentation has none (ADR 008).
 
 ### Seeing it run
 
@@ -165,9 +171,11 @@ Full detail in `docs/BACKLOG.md`. The ones that shape upcoming work:
   extraction stays confined to one module.
 - **D8** — every decoded frame is copied out of libav. Correct and portable, and
   too slow for the M3 playback budget. Needs a zero-copy path to the GPU.
-- **D22 / D21** — no panels, docking or workspaces, and no JKL. `rf_edit` proves
-  the keyboard workflow headless; nothing routes a real `QKeyEvent` into it.
-  **These are what remain of the M4 gate.**
+- **D21** — no JKL shuttle. It needs the Program monitor, which ADR 013 keeps
+  outside the widget tree because it owns a Vulkan surface CI cannot provide.
+  **The one item in M4's title with nothing behind it.**
+- **D23** — the Timeline panel's painting has no oracle. Tests prove it does not
+  crash, not that anyone can use it.
 - **D20** — a 1/90000 tick base cannot express 23.976 fps, so such a project
   cannot be created. Refused rather than rounded; needs a base like flicks.
 - **D18** — a desynced link is invisible. A ripple upstream can legitimately pull
