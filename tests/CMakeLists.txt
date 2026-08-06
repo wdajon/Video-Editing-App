@@ -124,15 +124,21 @@ if(RF_BUILD_APP)
 
     add_executable(rf_app_tests
         app/main.cpp
+        app/key_translation_test.cpp
         app/main_window_test.cpp
+        app/timeline_panel_test.cpp
         app/window_title_test.cpp)
 
     # No gtest_main: widgets need a QApplication, which app/main.cpp owns.
+    #
+    # Qt6::Test supplies QTest::keyClick, which is how the keyboard-only gate is
+    # exercised against a real widget rather than against the editor directly.
     target_link_libraries(rf_app_tests
         PRIVATE
             rf::app
             rf::warnings
-            GTest::gtest)
+            GTest::gtest
+            Qt6::Test)
 
     # Deliberately NOT calling rf_deploy_qt here. rf_app_tests and reelforge
     # share one output directory, and two concurrent windeployqt runs writing
@@ -144,6 +150,11 @@ if(RF_BUILD_APP)
     # build system order the two, so the Qt runtime is in place beside the test
     # binary before CTest ever runs it.
     add_dependencies(rf_app_tests reelforge)
+
+    # ...but reelforge does not link Qt6::Test, so windeployqt never copies it
+    # and the test binary dies at startup with no output. One extra library,
+    # copied explicitly, rather than a second windeployqt run that would race.
+    rf_deploy_qt_module(rf_app_tests Qt6::Test)
 
     gtest_discover_tests(rf_app_tests
         DISCOVERY_MODE PRE_TEST

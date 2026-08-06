@@ -66,7 +66,9 @@ if(RF_BUILD_APP)
         list(APPEND CMAKE_PREFIX_PATH "$ENV{QT_ROOT}")
     endif()
 
-    find_package(Qt6 6.10 QUIET COMPONENTS Widgets)
+    # Test supplies QTest::keyClick, which is how M4's keyboard-only gate is
+    # driven against a real widget rather than against the editor directly.
+    find_package(Qt6 6.10 QUIET COMPONENTS Widgets Test)
     if(NOT Qt6_FOUND)
         message(FATAL_ERROR
             "Qt 6.10 with the Widgets component was not found.\n"

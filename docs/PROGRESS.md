@@ -5,10 +5,32 @@
 **Exit gate:** the full trim set (ripple/roll/slip/slide) driven by keyboard
 only.
 
-**Gate status: not met.** The trim model is complete and every operation is
-reachable from a key chord through `rf_edit`, verified headless. What is missing
-is the window: nothing routes a real `QKeyEvent` into it, and there are no
-panels, no docking, no workspaces and no JKL (D21, D22).
+**Gate status: met mechanically on Windows, with two caveats outstanding.**
+
+```
+TimelinePanelTest.TheWholeTrimSetAndBackAgainFromTheKeyboard
+100% tests passed, 0 tests failed out of 425     (windows-debug, clean tree)
+100% tests passed, 0 tests failed out of 425     (windows-release)
+```
+
+All four operations and undo, performed by `QTest::keyClick` on a focused
+`TimelinePanel` inside a real `QMainWindow`, on the offscreen platform. Nothing
+in that test calls the editor, the command map or `make_trim` directly.
+
+**The two caveats are not formalities.**
+
+1. **CI has not run against any of this.** GitHub Actions was in a major outage
+   (webhooks throttled to ~15%) from iteration 4 onwards, so iterations 4 and 5
+   have only ever been compiled by MSVC. Every earlier milestone leaned on the
+   Linux/Clang and sanitizer jobs; this one has not had them.
+2. **Nobody has looked at it.** The panel's painting has no oracle (D23) — the
+   tests prove it does not crash and that it draws from the document, not that a
+   person sees a usable timeline. M3's gate required the project owner to watch
+   it run; the same applies here and has not happened.
+
+**JKL is not implemented** (D21), and it is named in the milestone title. It
+drives playback, so it needs the Program monitor, which ADR 013 deliberately
+leaves outside the widget tree.
 
 ### Iteration 1 — the trim set, and the media limit that makes it honest
 
@@ -206,12 +228,49 @@ code. `rf_edit` is deliberately Qt-free, which is what makes the workflow
 testable headless, but nothing yet routes a `QKeyEvent` into it. That plus
 panels, docking, workspaces and JKL is the rest of M4 (D21, D22).
 
+### Iteration 5 — a real key press, a real widget, a real edit
+
+**Increment:** the last hop. `to_key_chord` turns a `QKeyEvent` into a chord,
+`TimelinePanel` owns focus and painting, and `MainWindow` docks it and saves
+named workspaces. **Falsifiable check:** the whole trim set and its undo driven
+by `QTest::keyClick` against the panel, with the document asserted afterwards.
+
+`rf_edit` stays Qt-free, so translation is a free function rather than a widget
+method and is tested with synthesised events: every key in the enumeration is
+asserted to survive Qt → `Key` → Qt. That caught the trap worth naming — Qt
+reports `Qt::KeypadModifier` for the numeric keypad, which would have made
+`Ctrl+Right` from the keypad a different chord from `Ctrl+Right` from the arrow
+cluster, so a trim from the keypad would silently do nothing. It is masked.
+
+**Only one panel ships**, and that is the point. M0 wrote down that *"a panel
+that docks but shows nothing is indistinguishable from a broken panel"*, and the
+rule binds harder now than it did then: an empty Project dock inside a finished
+looking window is a worse lie than one in an empty shell. The Timeline is the
+only panel with content to draw, so it is the only one built. A workspace is
+`QMainWindow::saveState()` under a name — ReelForge does not invent a layout
+format, and it propagates Qt's refusal of state it does not recognise rather than
+leaving a workspace that silently does nothing.
+
+**A build-system bug, found because the convention says to look.** Linking
+`Qt6::Test` gave a test binary that built cleanly and died at startup with exit
+code 53 and no output: `windeployqt` runs against `reelforge`, which has no
+business linking Qt6::Test, so `Qt6Testd.dll` was never copied. `rf_deploy_qt_module`
+copies the one extra library — narrower than a second `windeployqt` run, which
+would race exactly as it did in M0 iteration 3a. Re-verified after
+`rm -rf build/windows-debug`, because a populated `bin/` is what hid that class
+of bug the first time.
+
+Two test assertions were also wrong rather than the code: a dock inside a window
+that was never shown is neither visible nor hidden, and `hasFocus()` additionally
+requires window activation, which the offscreen platform does not grant.
+`focusWidget()` is the part that carries meaning.
+
 ### Next action
 
-The Qt layer: panels, docking, workspaces, real key events routed into
-`rf_edit`, and JKL. That is one iteration of budget left against four named
-features, so the gate is likely to need more than the five-iteration cap allows —
-said now rather than discovered at the cap.
+Two things before M4 can be called done, and neither is code I can write:
+CI needs to run against iterations 4 and 5, and the project owner needs to launch
+`reelforge` and confirm the Timeline looks and behaves like a timeline. After
+that, JKL (D21) is the remaining item in the milestone's title.
 
 ## M3 — GPU compositor + Program monitor playback
 

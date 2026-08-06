@@ -1,11 +1,15 @@
 set(CMAKE_AUTOMOC ON)
 
 add_library(rf_app STATIC
+    key_translation.cpp
     main_window.cpp
     program_monitor.cpp
+    timeline_panel.cpp
     window_title.cpp
+    "${PROJECT_SOURCE_DIR}/include/rf/app/key_translation.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/app/main_window.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/app/program_monitor.hpp"
+    "${PROJECT_SOURCE_DIR}/include/rf/app/timeline_panel.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/app/window_title.hpp")
 
 add_library(rf::app ALIAS rf_app)
@@ -15,9 +19,11 @@ target_include_directories(rf_app PUBLIC "${PROJECT_SOURCE_DIR}/include")
 target_link_libraries(rf_app
     PUBLIC
         rf::core
+        rf::edit
         rf::gpu
         rf::media
         rf::playback
+        rf::timeline
         Qt6::Widgets
     PRIVATE
         rf::warnings)
