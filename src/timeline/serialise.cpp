@@ -62,6 +62,8 @@ std::string serialise(const Document& document) {
         out.push_back(' ');
         append_flag(out, track.locked);
         out.push_back(' ');
+        append_flag(out, track.sync_locked);
+        out.push_back(' ');
         append_quoted(out, track.name);
         out.push_back('\n');
 

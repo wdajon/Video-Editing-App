@@ -397,6 +397,174 @@ TEST(Trim, UndoNamesTheOperationForTheMenu) {
     EXPECT_EQ(stack.undo_name(), "Ripple Trim Out");
 }
 
+// --- sync lock (ADR 010) -----------------------------------------------------
+//
+// Sync lock moves *downstream material on other tracks* so it stays where the
+// user put it relative to the picture. It never trims anything, so it is not
+// what keeps a paired A/V clip together -- that is clip linking, which does not
+// exist yet (D16).
+
+/// The three-clip video track of `Fixture`, plus an audio track carrying a
+/// single clip whose position relative to the picture is what sync lock is for.
+struct SyncFixture : Fixture {
+    TrackId audio;
+    ClipId music;
+
+    explicit SyncFixture(Ticks music_start) {
+        audio = document.add_track(TrackKind::audio, "A1").value();
+        music = document.add_clip(audio, "music.wav", 0, music_start, 100, 1000).value();
+    }
+
+    [[nodiscard]] const std::vector<Clip>& audio_clips() const {
+        return document.find_track(audio)->clips;
+    }
+};
+
+TEST(SyncLock, IsOnByDefaultAsInPremiere) {
+    const Fixture fixture;
+    EXPECT_TRUE(fixture.document.find_track(fixture.track)->sync_locked);
+}
+
+TEST(SyncLock, ARippleShiftsDownstreamMaterialOnOtherTracks) {
+    SyncFixture fixture(300);  // music sits just past the end of the video track
+    CommandStack stack;
+    must_trim(fixture, stack, fixture.b, TrimKind::ripple_out, 20);
+
+    EXPECT_EQ(fixture.clip(fixture.c).start, 220);
+    EXPECT_EQ(fixture.clip(fixture.music).start, 320)
+        << "the music must keep its position relative to the picture";
+    EXPECT_EQ(fixture.clip(fixture.music).duration, 100) << "sync lock shifts, it never trims";
+    EXPECT_EQ(fixture.clip(fixture.music).source_in, 0);
+}
+
+TEST(SyncLock, ARippleOfTheInEdgePullsOtherTracksBack) {
+    // The ripple point is the clip's out point for both edges, so material after
+    // the *end* of b closes up -- even though the frames came off b's head.
+    SyncFixture fixture(300);
+    CommandStack stack;
+    must_trim(fixture, stack, fixture.b, TrimKind::ripple_in, 20);
+
+    EXPECT_EQ(fixture.clip(fixture.c).start, 180);
+    EXPECT_EQ(fixture.clip(fixture.music).start, 280);
+}
+
+TEST(SyncLock, MaterialBeforeTheRipplePointDoesNotMove) {
+    SyncFixture fixture(0);  // music sits under clip a, before the edit
+    CommandStack stack;
+    must_trim(fixture, stack, fixture.b, TrimKind::ripple_out, 20);
+
+    EXPECT_EQ(fixture.clip(fixture.music).start, 0)
+        << "a ripple only moves what comes after the edit point";
+}
+
+TEST(SyncLock, ClearingItLeavesTheTrackWhereItIs) {
+    SyncFixture fixture(300);
+    ASSERT_TRUE(fixture.document.set_track_sync_locked(fixture.audio, false).has_value());
+
+    CommandStack stack;
+    must_trim(fixture, stack, fixture.b, TrimKind::ripple_out, 20);
+
+    EXPECT_EQ(fixture.clip(fixture.c).start, 220) << "the trimmed track always ripples";
+    EXPECT_EQ(fixture.clip(fixture.music).start, 300) << "an unlocked track is left alone";
+}
+
+TEST(SyncLock, RollSlipAndSlideNeverReachAnotherTrack) {
+    // None of them changes the length of the sequence, so there is no downstream
+    // material to move. A sync lock that fired on these would shift clips for no
+    // reason at all.
+    for (const TrimKind kind : {TrimKind::roll, TrimKind::slip, TrimKind::slide}) {
+        SyncFixture fixture(300);
+        const std::vector<Clip> before = fixture.audio_clips();
+        CommandStack stack;
+        must_trim(fixture, stack, fixture.b, kind, 25);
+        EXPECT_EQ(fixture.audio_clips(), before) << to_string(kind) << " moved another track";
+    }
+}
+
+TEST(SyncLock, ARippleIsRefusedWhenAClipStraddlesTheRipplePoint) {
+    // No shift of the audio track keeps it legal: the clip's head is pinned by
+    // the material before the point and its tail is in the region that moves.
+    // Shifting round it would desync everything after it, silently.
+    SyncFixture fixture(150);  // spans 150..250, and the ripple point is at 200
+    CommandStack stack;
+    const std::vector<Clip> before = fixture.audio_clips();
+
+    const auto refused =
+        stack.execute(fixture.document, make_trim(fixture.b, TrimKind::ripple_out, 20));
+    ASSERT_TRUE(refused.has_error());
+    EXPECT_EQ(refused.error().code(), Errc::invalid_argument);
+    EXPECT_NE(refused.error().to_string().find("straddles"), std::string::npos)
+        << refused.error().to_string();
+
+    EXPECT_EQ(fixture.audio_clips(), before);
+    EXPECT_EQ(fixture.clip(fixture.c).start, 200) << "the trimmed track must not have moved either";
+    EXPECT_FALSE(stack.can_undo());
+}
+
+TEST(SyncLock, DroppingTheSyncLockLetsTheRipplePastAStraddlingClip) {
+    // The error tells the user this is the way out, so it had better work.
+    SyncFixture fixture(150);
+    ASSERT_TRUE(fixture.document.set_track_sync_locked(fixture.audio, false).has_value());
+
+    CommandStack stack;
+    must_trim(fixture, stack, fixture.b, TrimKind::ripple_out, 20);
+    EXPECT_EQ(fixture.clip(fixture.c).start, 220);
+}
+
+/// The audio track with a voice-over ending at 160 and the music starting at the
+/// ripple point, so the music has only 40 ticks of room to move left.
+SyncFixture crowded_audio() {
+    SyncFixture fixture(200);
+    EXPECT_TRUE(fixture.document.add_clip(fixture.audio, "vo.wav", 0, 60, 100, 1000).has_value());
+    return fixture;
+}
+
+TEST(SyncLock, ANeighbouringTrackNarrowsTheReachableRange) {
+    // The video track alone would allow the out point back by 99. The music
+    // cannot follow more than 40 without hitting the voice-over, and a ripple
+    // that moved one and not the other is exactly the desync being prevented.
+    const SyncFixture fixture = crowded_audio();
+
+    const TrimRange range = trim_range(fixture.document, fixture.b, TrimKind::ripple_out).value();
+    EXPECT_EQ(range.min_delta, -40) << "the music cannot pass the voice-over ending at 160";
+    EXPECT_EQ(range.max_delta, 100) << "unchanged: nothing bounds it on the right";
+}
+
+TEST(SyncLock, ARippleClampedByAnotherTrackStillMovesBothTogether) {
+    SyncFixture fixture = crowded_audio();
+    CommandStack stack;
+    must_trim(fixture, stack, fixture.b, TrimKind::ripple_out, -500);
+
+    EXPECT_EQ(fixture.clip(fixture.b).duration, 60) << "clamped to -40";
+    EXPECT_EQ(fixture.clip(fixture.c).start, 160);
+    EXPECT_EQ(fixture.clip(fixture.music).start, 160)
+        << "the music moved by the same 40, butting against the voice-over";
+}
+
+TEST(SyncLock, UndoRestoresEveryTrackTheRippleTouched) {
+    SyncFixture fixture(300);
+    const std::string before = serialise(fixture.document);
+
+    CommandStack stack;
+    must_trim(fixture, stack, fixture.b, TrimKind::ripple_out, 20);
+    EXPECT_NE(serialise(fixture.document), before);
+
+    ASSERT_TRUE(stack.undo(fixture.document).has_value());
+    EXPECT_EQ(serialise(fixture.document), before)
+        << "undoing a ripple has to put back every track it moved, not just one";
+}
+
+TEST(SyncLock, ATrackWithNothingAfterThePointIsNotPartOfTheEdit) {
+    SyncFixture fixture(0);
+    CommandStack stack;
+    must_trim(fixture, stack, fixture.b, TrimKind::ripple_out, 20);
+
+    const auto planned = plan_trim(fixture.document, fixture.b, TrimKind::ripple_out, 10);
+    ASSERT_TRUE(planned.has_value());
+    EXPECT_EQ(planned.value().size(), 1u)
+        << "a track with no downstream material must not enter the undo record";
+}
+
 // --- planning ----------------------------------------------------------------
 
 TEST(PlanTrim, AgreesWithWhatTheCommandDoes) {
@@ -406,16 +574,19 @@ TEST(PlanTrim, AgreesWithWhatTheCommandDoes) {
     const auto planned = plan_trim(fixture.document, fixture.b, TrimKind::roll, 30);
     ASSERT_TRUE(planned.has_value()) << planned.error().to_string();
 
+    ASSERT_EQ(planned.value().size(), 1u) << "a roll never reaches beyond its own track";
+    EXPECT_EQ(planned.value()[0].track, fixture.track);
+
     CommandStack stack;
     must_trim(fixture, stack, fixture.b, TrimKind::roll, 30);
-    EXPECT_EQ(fixture.clips(), planned.value());
+    EXPECT_EQ(fixture.clips(), planned.value()[0].clips);
 }
 
 TEST(PlanTrim, ClampsTheSameWayTheCommandDoes) {
     const Fixture fixture;
     const auto planned = plan_trim(fixture.document, fixture.b, TrimKind::slip, 10'000);
     ASSERT_TRUE(planned.has_value());
-    EXPECT_EQ(planned.value()[1].source_in, 200);
+    EXPECT_EQ(planned.value()[0].clips[1].source_in, 200);
 }
 
 TEST(PlanTrim, DoesNotTouchTheDocument) {

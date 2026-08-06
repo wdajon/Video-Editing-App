@@ -174,28 +174,19 @@ Result<TrackId> Document::add_track(TrackKind kind, std::string name) {
     return id;
 }
 
-Result<void> Document::insert_track_at(std::size_t index, TrackId id, TrackKind kind,
-                                       std::string name, bool muted, bool locked,
-                                       std::vector<Clip> clips) {
+Result<void> Document::insert_track_at(std::size_t index, Track track) {
     if (index > tracks_.size()) {
         return Error{Errc::invalid_argument, "track index out of range"};
     }
-    if (find_track(id) != nullptr) {
-        return Error{Errc::already_exists, to_string(id) + " is already present"};
+    if (find_track(track.id) != nullptr) {
+        return Error{Errc::already_exists, to_string(track.id) + " is already present"};
     }
-    for (const Clip& clip : clips) {
+    for (const Clip& clip : track.clips) {
         if (find_clip(clip.id) != nullptr) {
             return Error{Errc::already_exists, to_string(clip.id) + " is already present"};
         }
     }
 
-    Track track;
-    track.id = id;
-    track.kind = kind;
-    track.name = std::move(name);
-    track.muted = muted;
-    track.locked = locked;
-    track.clips = std::move(clips);
     sort_clips(track);
     tracks_.insert(tracks_.begin() + static_cast<std::ptrdiff_t>(index), std::move(track));
     return ok();
@@ -330,7 +321,35 @@ Result<void> Document::set_clip_bounds(ClipId id, Ticks source_in, Ticks start, 
 }
 
 Result<void> Document::replace_track_clips(TrackId id, std::vector<Clip> clips) {
-    Track* track = mutable_track(id);
+    std::vector<TrackClips> single;
+    single.push_back(TrackClips{id, std::move(clips)});
+    return replace_clips(std::move(single));
+}
+
+Result<void> Document::replace_clips(std::vector<TrackClips> rewrites) {
+    // Validate everything into a staging vector first. Installing as we go would
+    // leave a ripple across four tracks having changed three of them when the
+    // fourth turned out to be illegal, and nothing would record how far it got.
+    std::vector<std::vector<Clip>> staged;
+    staged.reserve(rewrites.size());
+
+    for (TrackClips& rewrite : rewrites) {
+        Result<std::vector<Clip>> checked = validate_track_clips(rewrite.track,
+                                                                 std::move(rewrite.clips));
+        if (!checked) {
+            return checked.error();
+        }
+        staged.push_back(std::move(checked).value());
+    }
+
+    for (std::size_t i = 0; i < rewrites.size(); ++i) {
+        mutable_track(rewrites[i].track)->clips = std::move(staged[i]);
+    }
+    return ok();
+}
+
+Result<std::vector<Clip>> Document::validate_track_clips(TrackId id, std::vector<Clip> clips) const {
+    const Track* track = find_track(id);
     if (track == nullptr) {
         return Error{Errc::not_found, to_string(id) + " does not exist"};
     }
@@ -377,8 +396,7 @@ Result<void> Document::replace_track_clips(TrackId id, std::vector<Clip> clips) 
         }
     }
 
-    track->clips = std::move(candidate.clips);
-    return ok();
+    return std::move(candidate.clips);
 }
 
 Result<void> Document::set_track_muted(TrackId id, bool muted) {
@@ -396,6 +414,15 @@ Result<void> Document::set_track_locked(TrackId id, bool locked) {
         return Error{Errc::not_found, to_string(id) + " does not exist"};
     }
     track->locked = locked;
+    return ok();
+}
+
+Result<void> Document::set_track_sync_locked(TrackId id, bool sync_locked) {
+    Track* track = mutable_track(id);
+    if (track == nullptr) {
+        return Error{Errc::not_found, to_string(id) + " does not exist"};
+    }
+    track->sync_locked = sync_locked;
     return ok();
 }
 

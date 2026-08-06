@@ -31,6 +31,7 @@ using rf::timeline::ClipId;
 using rf::timeline::CommandStack;
 using rf::timeline::Document;
 using rf::timeline::Ticks;
+using rf::timeline::Track;
 using rf::timeline::TrackId;
 using rf::timeline::TrackKind;
 using rf::timeline::TrimKind;
@@ -40,12 +41,9 @@ using rf::timeline::serialise;
 constexpr TrimKind kKinds[] = {TrimKind::ripple_in, TrimKind::ripple_out, TrimKind::roll,
                                TrimKind::slip, TrimKind::slide};
 
-/// Builds a track of butt-joined and gapped clips, each using a random window of
-/// a source longer than the window, so trims have room in both directions.
-Document random_document(std::mt19937_64& random) {
-    Document document = Document::create(Rational{1, 90000}).value();
-    const TrackId track = document.add_track(TrackKind::video, "V1").value();
-
+/// Fills one track with butt-joined and gapped clips, each using a random window
+/// of a source longer than the window, so trims have room in both directions.
+void fill_track(Document& document, TrackId track, std::mt19937_64& random) {
     Ticks cursor = static_cast<Ticks>(random() % 200);
     const int clips = 2 + static_cast<int>(random() % 8);
     for (int i = 0; i < clips; ++i) {
@@ -60,6 +58,24 @@ Document random_document(std::mt19937_64& random) {
         // anything to do; the rest leave a gap, which is the other branch.
         if (random() % 2 == 0) {
             cursor += static_cast<Ticks>(1 + (random() % 200));
+        }
+    }
+}
+
+/// Two or three tracks, independently laid out, with sync lock set at random.
+///
+/// The second track matters: with one track a ripple has nothing to keep in
+/// sync, and every sync-lock path in ADR 010 -- the range narrowing, the
+/// straddling refusal, the multi-track undo record -- goes unexercised.
+Document random_document(std::mt19937_64& random) {
+    Document document = Document::create(Rational{1, 90000}).value();
+    const int tracks = 2 + static_cast<int>(random() % 2);
+    for (int i = 0; i < tracks; ++i) {
+        const TrackKind kind = i == 0 ? TrackKind::video : TrackKind::audio;
+        const TrackId track = document.add_track(kind, "T" + std::to_string(i)).value();
+        fill_track(document, track, random);
+        if (random() % 4 == 0) {
+            EXPECT_TRUE(document.set_track_sync_locked(track, false).has_value());
         }
     }
     return document;
@@ -92,7 +108,7 @@ const Clip* find(const std::vector<Clip>& clips, ClipId id) {
 /// The document invariants, re-checked from outside the document. If a trim
 /// could produce an illegal state, `replace_track_clips` should have refused it
 /// -- this catches the case where it did not.
-void check_document_is_legal(const Document& document, TrackId track) {
+void check_track_is_legal(const Document& document, TrackId track) {
     const std::vector<Clip>& clips = document.find_track(track)->clips;
     for (std::size_t i = 0; i < clips.size(); ++i) {
         const Clip& clip = clips[i];
@@ -111,6 +127,45 @@ void check_document_is_legal(const Document& document, TrackId track) {
 bool has_clip_after(const std::vector<Clip>& clips, const Clip& subject) {
     return std::any_of(clips.begin(), clips.end(),
                        [&subject](const Clip& other) { return other.start > subject.start; });
+}
+
+void check_document_is_legal(const Document& document) {
+    for (const Track& track : document.tracks()) {
+        check_track_is_legal(document, track.id);
+    }
+}
+
+/// Sync lock's own property: every sync-locked track's downstream material moved
+/// by exactly the amount the sequence moved, and nothing upstream of the ripple
+/// point moved at all.
+///
+/// This is the invariant D15 was raised about. A ripple that shifted the trimmed
+/// track and left another one behind satisfies every per-track check above and
+/// still silently desyncs the edit.
+void check_sync_locked_tracks_kept_step(const std::vector<Track>& before, const Document& after,
+                                        TrackId trimmed, ClipId id, Ticks point) {
+    const Clip* now = after.find_clip(id);
+    ASSERT_NE(now, nullptr);
+    const Ticks shift = (now->start + now->duration) - point;
+
+    for (const Track& was : before) {
+        if (was.id == trimmed) {
+            continue;
+        }
+        const Track* is_now = after.find_track(was.id);
+        ASSERT_NE(is_now, nullptr);
+        for (const Clip& clip : was.clips) {
+            const Clip* moved = find(is_now->clips, clip.id);
+            ASSERT_NE(moved, nullptr);
+            const Ticks expected = clip.start + (was.sync_locked && clip.start >= point ? shift : 0);
+            EXPECT_EQ(moved->start, expected)
+                << "clip " << clip.id.value() << " on track " << was.id.value()
+                << (was.sync_locked ? " did not keep step with the ripple"
+                                    : " moved despite its sync lock being off");
+            EXPECT_EQ(moved->duration, clip.duration) << "sync lock shifts, it never trims";
+            EXPECT_EQ(moved->source_in, clip.source_in);
+        }
+    }
 }
 
 /// The property that distinguishes each operation from the others.
@@ -202,37 +257,63 @@ TEST(TrimFuzz, RandomTrimsNeverLeaveAnIllegalDocumentAndAlwaysUndo) {
 
     int applied = 0;
     int refused = 0;
+    // A multi-track fuzz that never actually crossed a track boundary would look
+    // identical to the single-track one it replaced, and would prove nothing
+    // about ADR 010. Both of these are asserted non-zero at the end.
+    int crossed_tracks = 0;
+    int straddle_refusals = 0;
 
     for (int seed = 0; seed < kDocuments; ++seed) {
         std::mt19937_64 random(0x517cc1b727220a95ULL + static_cast<std::uint64_t>(seed));
         Document document = random_document(random);
-        const TrackId track = document.tracks().front().id;
         const std::string initial = serialise(document);
 
         CommandStack stack;
         for (int step = 0; step < kTrimsPerDocument; ++step) {
-            const std::vector<Clip>& clips = document.find_track(track)->clips;
-            const ClipId id = clips[random() % clips.size()].id;
+            const Track& track = document.tracks()[random() % document.tracks().size()];
+            const TrackId track_id = track.id;
+            const Clip& subject = track.clips[random() % track.clips.size()];
+            const ClipId id = subject.id;
+            const Ticks point = subject.start + subject.duration;
             const TrimKind kind = kKinds[random() % std::size(kKinds)];
             // Deltas well past every limit as often as small ones, so clamping
             // is exercised rather than avoided.
             const Ticks delta = static_cast<Ticks>(random() % 4000) - 2000;
 
-            const Snapshot before = snapshot(document, track);
+            const Snapshot before = snapshot(document, track_id);
+            const std::vector<Track> all_before = document.tracks();
             const auto result = stack.execute(document, make_trim(id, kind, delta));
             if (!result) {
                 ++refused;
-                EXPECT_EQ(snapshot(document, track).clips, before.clips)
+                if (result.error().to_string().find("straddles") != std::string::npos) {
+                    ++straddle_refusals;
+                }
+                EXPECT_EQ(document.tracks(), all_before)
                     << "a refused trim changed the document";
                 continue;
             }
             ++applied;
+            for (const Track& was : all_before) {
+                if (was.id != track_id && *document.find_track(was.id) != was) {
+                    ++crossed_tracks;
+                    break;
+                }
+            }
 
-            check_document_is_legal(document, track);
-            const Snapshot after = snapshot(document, track);
+            check_document_is_legal(document);
+            const Snapshot after = snapshot(document, track_id);
             check_operation_preserved_what_it_should(kind, id, before, after);
             if (kind == TrimKind::ripple_in || kind == TrimKind::ripple_out) {
                 check_ripple_moved_the_tail_rigidly(id, before, after);
+                check_sync_locked_tracks_kept_step(all_before, document, track_id, id, point);
+            } else {
+                // Roll, slip and slide never reach another track at all.
+                for (const Track& was : all_before) {
+                    if (was.id != track_id) {
+                        EXPECT_EQ(*document.find_track(was.id), was)
+                            << to_string(kind) << " moved a track it has no business touching";
+                    }
+                }
             }
         }
 
@@ -249,7 +330,11 @@ TEST(TrimFuzz, RandomTrimsNeverLeaveAnIllegalDocumentAndAlwaysUndo) {
     EXPECT_GT(applied, kDocuments * kTrimsPerDocument / 2)
         << "too few trims applied for this to be a meaningful check";
     EXPECT_GT(refused, 0) << "no trim ever hit a limit; the deltas are too small";
-    std::printf("[trim fuzz] documents=%d applied=%d refused=%d\n", kDocuments, applied, refused);
+    EXPECT_GT(crossed_tracks, 0) << "no ripple ever moved a sync-locked track; ADR 010 untested";
+    EXPECT_GT(straddle_refusals, 0)
+        << "no ripple ever met a clip across the ripple point; the refusal path is untested";
+    std::printf("[trim fuzz] documents=%d applied=%d refused=%d crossed=%d straddled=%d\n",
+                kDocuments, applied, refused, crossed_tracks, straddle_refusals);
 }
 
 }  // namespace

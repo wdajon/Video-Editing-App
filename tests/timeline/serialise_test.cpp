@@ -28,7 +28,7 @@ Document make_document() {
 TEST(Serialise, EmptyDocumentCarriesVersionBaseAndCounter) {
     const Document document = make_document();
     EXPECT_EQ(serialise(document),
-              "reelforge/2\n"
+              "reelforge/3\n"
               "timebase 1/90000\n"
               "nextid 1\n");
 }
@@ -42,13 +42,13 @@ TEST(Serialise, WritesTracksAndClips) {
     ASSERT_TRUE(document.set_track_muted(audio, true).has_value());
 
     EXPECT_EQ(serialise(document),
-              "reelforge/2\n"
+              "reelforge/3\n"
               "timebase 1/90000\n"
               "nextid 5\n"
-              "track 1 video 0 0 \"V1\"\n"
+              "track 1 video 0 0 1 \"V1\"\n"
               "  clip 2 100 1000000 0 9000 1 \"a.mp4\"\n"
               "  clip 3 0 1000000 9000 4500 1 \"b.mp4\"\n"
-              "track 4 audio 1 0 \"A1\"\n");
+              "track 4 audio 1 0 1 \"A1\"\n");
 }
 
 TEST(Serialise, IsIndependentOfInsertionOrder) {

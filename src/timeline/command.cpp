@@ -76,7 +76,11 @@ protected:
     }
 
     [[nodiscard]] Result<void> recreate(Document& document) override {
-        return document.insert_track_at(index_, id_, kind_, name_, false, false, {});
+        Track track;
+        track.id = id_;
+        track.kind = kind_;
+        track.name = name_;
+        return document.insert_track_at(index_, std::move(track));
     }
 
     [[nodiscard]] Result<void> destroy(Document& document) override {
@@ -167,8 +171,7 @@ public:
     }
 
     [[nodiscard]] Result<void> revert(Document& document) override {
-        return document.insert_track_at(index_, removed_.id, removed_.kind, removed_.name,
-                                        removed_.muted, removed_.locked, removed_.clips);
+        return document.insert_track_at(index_, removed_);
     }
 
 private:
@@ -327,6 +330,31 @@ private:
     bool was_muted_ = false;
 };
 
+class SetTrackSyncLockedCommand final : public Command {
+public:
+    SetTrackSyncLockedCommand(TrackId id, bool sync_locked) : id_(id), sync_locked_(sync_locked) {}
+
+    [[nodiscard]] std::string_view name() const noexcept override { return "Sync Lock Track"; }
+
+    [[nodiscard]] Result<void> apply(Document& document) override {
+        const Track* track = document.find_track(id_);
+        if (track == nullptr) {
+            return Error{Errc::not_found, to_string(id_) + " does not exist"};
+        }
+        was_sync_locked_ = track->sync_locked;
+        return document.set_track_sync_locked(id_, sync_locked_);
+    }
+
+    [[nodiscard]] Result<void> revert(Document& document) override {
+        return document.set_track_sync_locked(id_, was_sync_locked_);
+    }
+
+private:
+    TrackId id_;
+    bool sync_locked_;
+    bool was_sync_locked_ = false;
+};
+
 class SetTrackLockedCommand final : public Command {
 public:
     SetTrackLockedCommand(TrackId id, bool locked) : id_(id), locked_(locked) {}
@@ -451,6 +479,10 @@ std::unique_ptr<Command> make_set_track_muted(TrackId id, bool muted) {
 
 std::unique_ptr<Command> make_set_track_locked(TrackId id, bool locked) {
     return std::make_unique<SetTrackLockedCommand>(id, locked);
+}
+
+std::unique_ptr<Command> make_set_track_sync_locked(TrackId id, bool sync_locked) {
+    return std::make_unique<SetTrackSyncLockedCommand>(id, sync_locked);
 }
 
 }  // namespace rf::timeline

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -72,7 +73,90 @@ struct Neighbourhood {
     return (std::numeric_limits<Ticks>::max() - last.start) - last.duration;
 }
 
-[[nodiscard]] Result<TrimRange> range_of(const Neighbourhood& where, TrimKind kind) {
+[[nodiscard]] constexpr bool is_ripple(TrimKind kind) noexcept {
+    return kind == TrimKind::ripple_in || kind == TrimKind::ripple_out;
+}
+
+/// Where the sequence lengthens or shortens, for either ripple edge.
+///
+/// It is the clip's out point in both cases, which is worth deriving for the in
+/// edge: rippling the in point takes material off the head while the clip keeps
+/// its start, so the clip's *end* is what retreats and the timeline closes up
+/// from there. See docs/adr/010-sync-lock.md.
+[[nodiscard]] constexpr Ticks ripple_point(const Clip& clip) noexcept {
+    return clip.start + clip.duration;
+}
+
+/// How far the material at or after `point` on `track` may shift.
+///
+/// `std::nullopt` means the track has nothing at or after the point, so it
+/// places no constraint at all -- distinct from "it may not move", and worth
+/// keeping distinct so an empty track cannot silently veto every ripple.
+struct ShiftRoom {
+    Ticks min_shift;
+    Ticks max_shift;
+};
+
+[[nodiscard]] Result<std::optional<ShiftRoom>> room_on_track(const Track& track, Ticks point) {
+    for (const Clip& clip : track.clips) {
+        // A clip across the point cannot move -- its head is pinned by material
+        // before the point -- and cannot stay, because its tail is in the region
+        // that moves. Refusing names the obstruction; shifting round it would
+        // desync the rest of the track silently, which is the whole defect this
+        // is here to fix.
+        if (clip.start < point && point < clip.start + clip.duration) {
+            return Error{Errc::invalid_argument,
+                         to_string(clip.id) + " on " + to_string(track.id) +
+                             " straddles the ripple point at " + std::to_string(point) +
+                             "; drop that track's sync lock to ripple past it"};
+        }
+    }
+
+    const auto first = std::find_if(track.clips.begin(), track.clips.end(),
+                                    [point](const Clip& clip) { return clip.start >= point; });
+    if (first == track.clips.end()) {
+        return std::optional<ShiftRoom>{};
+    }
+
+    const Ticks room_before =
+        first == track.clips.begin() ? 0 : (first - 1)->start + (first - 1)->duration;
+    const Clip& last = track.clips.back();
+    return std::optional<ShiftRoom>{ShiftRoom{
+        room_before - first->start,
+        (std::numeric_limits<Ticks>::max() - last.start) - last.duration}};
+}
+
+/// Narrows `range` by what every sync-locked track other than the trimmed one
+/// allows. A ripple that the music bed on A2 has no room for cannot happen.
+[[nodiscard]] Result<TrimRange> narrow_by_sync_locked_tracks(const Document& document,
+                                                             const Neighbourhood& where,
+                                                             TrimKind kind, TrimRange range) {
+    const Ticks point = ripple_point(where.self());
+    for (const Track& track : document.tracks()) {
+        if (track.id == where.track->id || !track.sync_locked) {
+            continue;
+        }
+        Result<std::optional<ShiftRoom>> room = room_on_track(track, point);
+        if (!room) {
+            return room.error();
+        }
+        if (!room.value()) {
+            continue;
+        }
+        const ShiftRoom& shift = *room.value();
+        // A ripple of the out edge shifts by +delta, of the in edge by -delta.
+        // Both bounds are derived from non-negative positions, so negating them
+        // cannot overflow.
+        const Ticks low = kind == TrimKind::ripple_in ? -shift.max_shift : shift.min_shift;
+        const Ticks high = kind == TrimKind::ripple_in ? -shift.min_shift : shift.max_shift;
+        range.min_delta = std::max(range.min_delta, low);
+        range.max_delta = std::min(range.max_delta, high);
+    }
+    return range;
+}
+
+[[nodiscard]] Result<TrimRange> range_of(const Document& document, const Neighbourhood& where,
+                                         TrimKind kind) {
     const Clip& self = where.self();
     TrimRange range;
 
@@ -84,12 +168,12 @@ struct Neighbourhood {
             // left, so it cannot run out of room.
             range.min_delta = -self.source_in;
             range.max_delta = self.duration - 1;
-            return range;
+            return narrow_by_sync_locked_tracks(document, where, kind, range);
 
         case TrimKind::ripple_out:
             range.min_delta = 1 - self.duration;
             range.max_delta = std::min(tail(self), room_downstream(where));
-            return range;
+            return narrow_by_sync_locked_tracks(document, where, kind, range);
 
         case TrimKind::roll: {
             const Clip* incoming = where.next();
@@ -139,8 +223,9 @@ struct Neighbourhood {
     return Error{Errc::internal, "unknown trim kind"};
 }
 
-/// Applies `kind` to a copy of the track's clips. `delta` is already clamped.
-[[nodiscard]] std::vector<Clip> rewrite(const Neighbourhood& where, TrimKind kind, Ticks delta) {
+/// Applies `kind` to a copy of the trimmed track's clips. `delta` is clamped.
+[[nodiscard]] std::vector<Clip> rewrite_own_track(const Neighbourhood& where, TrimKind kind,
+                                                  Ticks delta) {
     std::vector<Clip> clips = where.track->clips;
     Clip& self = clips[where.index];
 
@@ -200,10 +285,47 @@ struct Neighbourhood {
     return clips;
 }
 
-/// Every trim is the same shape: work out how far it can go, rewrite the track,
-/// and hand the previous clip vector to undo. Atomicity comes from
-/// `Document::replace_track_clips`, which validates the whole vector before
-/// installing any of it.
+/// Every track the operation rewrites, trimmed track first.
+///
+/// Only a ripple reaches beyond its own track. Roll, slip and slide all leave
+/// the sequence the same length, so there is no downstream material to move and
+/// nothing for a sync lock to do.
+[[nodiscard]] std::vector<TrackClips> rewrite_all(const Document& document,
+                                                  const Neighbourhood& where, TrimKind kind,
+                                                  Ticks delta) {
+    std::vector<TrackClips> rewrites;
+    rewrites.push_back(TrackClips{where.track->id, rewrite_own_track(where, kind, delta)});
+    if (!is_ripple(kind)) {
+        return rewrites;
+    }
+
+    const Ticks point = ripple_point(where.self());
+    const Ticks shift = kind == TrimKind::ripple_in ? -delta : delta;
+    for (const Track& track : document.tracks()) {
+        if (track.id == where.track->id || !track.sync_locked) {
+            continue;
+        }
+        std::vector<Clip> clips = track.clips;
+        bool moved = false;
+        for (Clip& clip : clips) {
+            if (clip.start >= point) {
+                clip.start += shift;
+                moved = true;
+            }
+        }
+        // A track with nothing after the point is not part of the edit, and
+        // listing it would put an unchanged vector into the undo record.
+        if (moved) {
+            rewrites.push_back(TrackClips{track.id, std::move(clips)});
+        }
+    }
+    return rewrites;
+}
+
+/// Every trim is the same shape: work out how far it can go, rewrite the tracks
+/// it touches, and hand their previous clip vectors to undo. Atomicity comes
+/// from `Document::replace_clips`, which validates every rewrite before
+/// installing any of them.
 class TrimCommand final : public Command {
 public:
     TrimCommand(ClipId clip, TrimKind kind, Ticks delta)
@@ -216,7 +338,7 @@ public:
         if (!where) {
             return where.error();
         }
-        Result<TrimRange> range = range_of(where.value(), kind_);
+        Result<TrimRange> range = range_of(document, where.value(), kind_);
         if (!range) {
             return range.error();
         }
@@ -228,19 +350,24 @@ public:
                              std::to_string(requested_) + " ticks has no room to move"};
         }
 
-        track_ = where.value().track->id;
-        before_ = where.value().track->clips;
-        return document.replace_track_clips(track_, rewrite(where.value(), kind_, applied));
+        std::vector<TrackClips> rewrites = rewrite_all(document, where.value(), kind_, applied);
+        // Capture the previous state of exactly the tracks about to change --
+        // undo has to put back every one of them, not just the trimmed one.
+        before_.clear();
+        before_.reserve(rewrites.size());
+        for (const TrackClips& rewrite : rewrites) {
+            before_.push_back(TrackClips{rewrite.track, document.find_track(rewrite.track)->clips});
+        }
+        return document.replace_clips(std::move(rewrites));
     }
 
     [[nodiscard]] Result<void> revert(Document& document) override {
-        return document.replace_track_clips(track_, before_);
+        return document.replace_clips(before_);
     }
 
 private:
-    std::vector<Clip> before_;
+    std::vector<TrackClips> before_;
     ClipId clip_;
-    TrackId track_;
     TrimKind kind_;
     Ticks requested_;
 };
@@ -267,20 +394,20 @@ Result<TrimRange> trim_range(const Document& document, ClipId clip, TrimKind kin
     if (!where) {
         return where.error();
     }
-    return range_of(where.value(), kind);
+    return range_of(document, where.value(), kind);
 }
 
-Result<std::vector<Clip>> plan_trim(const Document& document, ClipId clip, TrimKind kind,
-                                    Ticks delta) {
+Result<std::vector<TrackClips>> plan_trim(const Document& document, ClipId clip, TrimKind kind,
+                                          Ticks delta) {
     Result<Neighbourhood> where = locate(document, clip);
     if (!where) {
         return where.error();
     }
-    Result<TrimRange> range = range_of(where.value(), kind);
+    Result<TrimRange> range = range_of(document, where.value(), kind);
     if (!range) {
         return range.error();
     }
-    return rewrite(where.value(), kind, clamp_delta(range.value(), delta));
+    return rewrite_all(document, where.value(), kind, clamp_delta(range.value(), delta));
 }
 
 std::unique_ptr<Command> make_trim(ClipId clip, TrimKind kind, Ticks delta) {

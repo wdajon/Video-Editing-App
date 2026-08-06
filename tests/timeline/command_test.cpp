@@ -249,7 +249,7 @@ TEST(Command, DeepHistoryUndoesInReverseOrder) {
     // And undoing that last one lands on a pristine document, id counter reset.
     ASSERT_TRUE(stack.undo(document).has_value());
     EXPECT_EQ(serialise(document),
-              "reelforge/2\n"
+              "reelforge/3\n"
               "timebase 1/90000\n"
               "nextid 1\n");
 }

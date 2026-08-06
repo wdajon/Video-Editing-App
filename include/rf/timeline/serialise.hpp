@@ -25,7 +25,12 @@ namespace rf::timeline {
 /// Version 2 added `source_duration` to the clip record (ADR 009). A version 1
 /// file is missing a field with no safe default, so it cannot be read by
 /// widening alone -- which is the case the version number was put here for.
-inline constexpr int kProjectFormatVersion = 2;
+///
+/// Version 3 added `sync_locked` to the track record (ADR 010). This one *does*
+/// have a safe default -- Premiere's default is on, and so is ours -- so a
+/// reader could widen a v2 file. The version still moves: a field that appears
+/// in the bytes changes them, and byte-identity is the whole undo gate.
+inline constexpr int kProjectFormatVersion = 3;
 
 /// Serialises `document` canonically.
 ///

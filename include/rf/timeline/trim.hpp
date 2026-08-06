@@ -68,19 +68,25 @@ struct TrimRange {
 
 /// The reachable range of `kind` on `clip`.
 ///
-/// Fails only when the operation is not applicable at all -- an unknown clip, or
-/// a roll with no butt-joined clip after it. An applicable operation with no
-/// room returns an empty range, because "you are at the media limit" is a
-/// different answer from "that is not an edit".
+/// Fails only when the operation is not applicable at all -- an unknown clip, a
+/// roll with no butt-joined clip after it, or a ripple obstructed by a clip
+/// straddling the ripple point on a sync-locked track (ADR 010). An applicable
+/// operation with no room returns an empty range, because "you are at the media
+/// limit" is a different answer from "that is not an edit".
+///
+/// A ripple's range is the intersection of what every affected track allows: the
+/// music bed on A2 has to have somewhere to go, or the edit cannot happen.
 [[nodiscard]] Result<TrimRange> trim_range(const Document& document, ClipId clip, TrimKind kind);
 
-/// The clips `kind` would leave on the track, with `delta` clamped to the
-/// reachable range. Exposed so the UI can draw a trim before committing it, and
-/// so tests can assert the arithmetic without going through the command stack.
+/// The clips `kind` would leave behind, with `delta` clamped to the reachable
+/// range. Exposed so the UI can draw a trim before committing it, and so tests
+/// can assert the arithmetic without going through the command stack.
 ///
-/// The returned vector is the *whole* track: a ripple moves every later clip.
-[[nodiscard]] Result<std::vector<Clip>> plan_trim(const Document& document, ClipId clip,
-                                                  TrimKind kind, Ticks delta);
+/// Each entry is a *whole* track, because a ripple moves every later clip on it.
+/// A ripple returns one entry per affected track -- the trimmed one plus every
+/// sync-locked track (ADR 010); roll, slip and slide return exactly one.
+[[nodiscard]] Result<std::vector<TrackClips>> plan_trim(const Document& document, ClipId clip,
+                                                        TrimKind kind, Ticks delta);
 
 /// A trim as an undoable command.
 ///

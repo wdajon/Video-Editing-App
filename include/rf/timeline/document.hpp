@@ -54,15 +54,29 @@ struct Clip {
 /// The ordering and non-overlap are invariants the document enforces on every
 /// mutation, not conventions callers are trusted to maintain: a timeline with
 /// two clips occupying the same instant has no defined render result.
+/// `sync_locked` decides whether this track's downstream material follows a
+/// ripple performed on another track. It defaults to true, as Premiere does, and
+/// it is what keeps a music bed on A2 where the user put it relative to the
+/// picture. See docs/adr/010-sync-lock.md -- notably for what it is *not*: it
+/// never trims anything, so it is not what keeps a paired A/V clip together.
 struct Track {
     TrackId id;
     TrackKind kind = TrackKind::video;
     std::string name;
     bool muted = false;
     bool locked = false;
+    bool sync_locked = true;
     std::vector<Clip> clips;
 
     friend bool operator==(const Track&, const Track&) = default;
+};
+
+/// A replacement set of clips for one track, as `replace_clips` takes them.
+struct TrackClips {
+    TrackId track;
+    std::vector<Clip> clips;
+
+    friend bool operator==(const TrackClips&, const TrackClips&) = default;
 };
 
 /// The whole edit.
@@ -96,11 +110,10 @@ public:
     /// Appends a track and returns its new id.
     [[nodiscard]] Result<TrackId> add_track(TrackKind kind, std::string name);
 
-    /// Inserts a track at `index`, reusing `id`. Used by undo, which must
-    /// restore both the identity and the position of a removed track.
-    [[nodiscard]] Result<void> insert_track_at(std::size_t index, TrackId id, TrackKind kind,
-                                               std::string name, bool muted, bool locked,
-                                               std::vector<Clip> clips);
+    /// Inserts a track at `index`, keeping its id and every flag. Used by undo,
+    /// which must restore the identity, the position and the state of a removed
+    /// track -- and which already holds exactly this object.
+    [[nodiscard]] Result<void> insert_track_at(std::size_t index, Track track);
 
     /// Removes a track and hands back everything needed to put it back exactly.
     [[nodiscard]] Result<Track> remove_track(TrackId id);
@@ -142,8 +155,18 @@ public:
     /// cannot drift -- see docs/adr/009-trim-model.md.
     [[nodiscard]] Result<void> replace_track_clips(TrackId track, std::vector<Clip> clips);
 
+    /// The same, across several tracks at once.
+    ///
+    /// A ripple across four sync-locked tracks that validated and installed them
+    /// one at a time could fail on the fourth having already changed three.
+    /// Every rewrite here is checked before any of them is installed.
+    /// `replace_track_clips` is a one-element call into this, so the two cannot
+    /// disagree about what is legal. See docs/adr/010-sync-lock.md.
+    [[nodiscard]] Result<void> replace_clips(std::vector<TrackClips> rewrites);
+
     [[nodiscard]] Result<void> set_track_muted(TrackId id, bool muted);
     [[nodiscard]] Result<void> set_track_locked(TrackId id, bool locked);
+    [[nodiscard]] Result<void> set_track_sync_locked(TrackId id, bool sync_locked);
     [[nodiscard]] Result<void> set_clip_enabled(ClipId id, bool enabled);
 
     /// Restores the id counter. Only undo needs this: a command that issued an
@@ -158,6 +181,11 @@ private:
     [[nodiscard]] Clip* mutable_clip(ClipId id) noexcept;
     [[nodiscard]] Result<void> check_no_overlap(const Track& track, Ticks start, Ticks duration,
                                                 ClipId ignoring) const;
+    /// Checks a replacement clip vector for one track and returns it sorted,
+    /// without installing it. Separate from installation so `replace_clips` can
+    /// check every track before changing any of them.
+    [[nodiscard]] Result<std::vector<Clip>> validate_track_clips(TrackId track,
+                                                                 std::vector<Clip> clips) const;
     /// The span invariants every clip must satisfy, wherever it came from.
     [[nodiscard]] static Result<void> check_span(Ticks source_in, Ticks start, Ticks duration,
                                                  Ticks source_duration);
