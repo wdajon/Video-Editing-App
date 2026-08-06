@@ -69,6 +69,7 @@ gtest_discover_tests(rf_gpu_tests
 
 add_executable(rf_playback_tests
     playback/frame_log_test.cpp
+    playback/pacer_test.cpp
     playback/playback_clock_test.cpp)
 
 target_link_libraries(rf_playback_tests

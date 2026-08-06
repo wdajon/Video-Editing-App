@@ -27,6 +27,7 @@
 #include "rf/media/rational.hpp"
 #include "rf/playback/clock.hpp"
 #include "rf/playback/frame_log.hpp"
+#include "rf/playback/pacer.hpp"
 #include "rf/playback/playback_clock.hpp"
 
 namespace {
@@ -178,29 +179,27 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    // Paced: wait until each frame is due, then render whatever the clock says
+    // should be on screen. Without this the loop free-runs, never falls behind,
+    // and its zero-drop result measures throughput rather than playback.
+    rf::playback::Pacer pacer{wall, clock.value(), log};
+
     for (std::int64_t frame = 0; frame < total_frames; ++frame) {
+        auto tick = pacer.wait_next();
+        if (!tick) {
+            std::fprintf(stderr, "%s\n", tick.error().to_string().c_str());
+            return 2;
+        }
+
         auto composed = compositor.value().composite_into(target.value(), layers);
         if (!composed) {
             std::fprintf(stderr, "composite failed at frame %lld: %s\n",
-                         static_cast<long long>(frame), composed.error().to_string().c_str());
+                         static_cast<long long>(tick.value().frame),
+                         composed.error().to_string().c_str());
             return 1;
         }
 
-        const auto due = clock.value().time_of_frame(frame);
-        if (!due) {
-            std::fprintf(stderr, "%s\n", due.error().to_string().c_str());
-            return 2;
-        }
-
-        // The frame index the clock says should be showing, not the loop
-        // counter. If compositing falls behind, the clock has moved past frames
-        // that were never produced, and those are the drops.
-        const auto current = clock.value().frame_at(wall.now());
-        if (!current) {
-            std::fprintf(stderr, "%s\n", current.error().to_string().c_str());
-            return 2;
-        }
-        log.record(current.value(), wall.now(), due.value());
+        pacer.presented(tick.value(), wall.now());
     }
 
     const auto elapsed = wall.now() - start;

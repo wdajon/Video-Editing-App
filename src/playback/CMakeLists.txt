@@ -7,9 +7,11 @@
 
 add_library(rf_playback STATIC
     frame_log.cpp
+    pacer.cpp
     playback_clock.cpp
     "${PROJECT_SOURCE_DIR}/include/rf/playback/clock.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/playback/frame_log.hpp"
+    "${PROJECT_SOURCE_DIR}/include/rf/playback/pacer.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/playback/playback_clock.hpp")
 
 add_library(rf::playback ALIAS rf_playback)
