@@ -28,9 +28,8 @@ in that test calls the editor, the command map or `make_trim` directly.
    person sees a usable timeline. M3's gate required the project owner to watch
    it run; the same applies here and has not happened.
 
-**JKL is not implemented** (D21), and it is named in the milestone title. It
-drives playback, so it needs the Program monitor, which ADR 013 deliberately
-leaves outside the widget tree.
+**JKL now exists** (D21 resolved, iteration 6) and moves the playback clock and
+the drawn playhead. It does **not** move a picture (D25) — see below.
 
 ### Iteration 1 — the trim set, and the media limit that makes it honest
 
@@ -265,12 +264,56 @@ that was never shown is neither visible nor hidden, and `hasFocus()` additionall
 requires window activation, which the offscreen platform does not grant.
 `focusWidget()` is the part that carries meaning.
 
+### Iteration 6 — JKL, wired to a clock rather than to nothing
+
+**Increment:** D21. `rf::edit::Shuttle` is the JKL state machine; `rf::app::Transport`
+applies its rate to the `PlaybackClock` M3 already built. **Falsifiable check:**
+the ladder asserted rung by rung as exact rationals, the transport driven with an
+explicit `now` rather than by waiting, and J/K/L pressed as real key events on
+the window with the clock's rate asserted afterwards.
+
+**The sources disagreed, so the ladder is data.** Doubling (1, 2, 4, 8) appears
+alongside linear (1, 2, 3, 4), and the Shift behaviour is described both as slow
+motion and as a finer step. The mission's rule for that case is to record all the
+values, implement the most conservative, and put it behind configuration rather
+than a magic number — so the ladder is a `std::vector<Rational>` defaulting to
+doubling, and nothing in the transition logic knows how many rungs there are.
+`ShuttleTest.TheLadderIsDataAndCanBeReplaced` runs a three-rung linear ladder.
+
+Pressing the opposite key steps **one rung toward zero** rather than jumping to
+reverse: a single keystroke that flips direction at 16x is hard to undo by feel,
+and this is a control operated without looking.
+
+The rate is a signed `Rational`, so half speed is exactly 1/2. `PlaybackClock`
+already took a rational rate and already accepted a negative one, so reverse and
+slow motion needed nothing new from it — a good sign the M3 clock was cut at the
+right shape.
+
+```
+100% tests passed, 0 tests failed out of 453     (windows-debug)
+100% tests passed, 0 tests failed out of 453     (windows-release)
+
+edit = 54 tests (was 41), app = 47 (was 32)
+```
+
+**What JKL is not connected to, stated plainly (D25).** Pressing L sweeps the
+playhead across the Timeline. It does not play video: the Program monitor owns a
+Vulkan surface and sits outside the widget tree by design (ADR 013), so nothing
+decodes or presents at the shuttle rate. Connecting it needs a device CI cannot
+provide. Filed rather than faked.
+
+**A test bug worth recording**, because the same mistake is easy to repeat:
+`Nanoseconds` counts from an unspecified epoch, so passing an absolute two
+seconds to `refresh_playhead` landed long *before* the window's anchor and read
+as frame −6855364. Only differences are meaningful. Exactness lives in the
+Transport tests, which own their `now` entirely; the window test only has to
+prove the wiring carries.
+
 ### Next action
 
-Two things before M4 can be called done, and neither is code I can write:
-CI needs to run against iterations 4 and 5, and the project owner needs to launch
-`reelforge` and confirm the Timeline looks and behaves like a timeline. After
-that, JKL (D21) is the remaining item in the milestone's title.
+Two things before M4 can be called done, and neither is code I can write: CI
+needs to run against iterations 4 to 6, and the project owner needs to launch
+`reelforge` and confirm the Timeline looks and behaves like one.
 
 ## M3 — GPU compositor + Program monitor playback
 

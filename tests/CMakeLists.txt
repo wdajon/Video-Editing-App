@@ -106,6 +106,7 @@ gtest_discover_tests(rf_timeline_tests
 add_executable(rf_edit_tests
     edit/command_map_test.cpp
     edit/key_test.cpp
+    edit/shuttle_test.cpp
     edit/keyboard_workflow_test.cpp)
 
 target_link_libraries(rf_edit_tests
@@ -127,6 +128,7 @@ if(RF_BUILD_APP)
         app/key_translation_test.cpp
         app/main_window_test.cpp
         app/timeline_panel_test.cpp
+        app/transport_test.cpp
         app/window_title_test.cpp)
 
     # No gtest_main: widgets need a QApplication, which app/main.cpp owns.

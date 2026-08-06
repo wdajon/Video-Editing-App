@@ -11,10 +11,12 @@ add_library(rf_edit STATIC
     command_map.cpp
     editor.cpp
     key.cpp
+    shuttle.cpp
     "${PROJECT_SOURCE_DIR}/include/rf/edit/action.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/edit/command_map.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/edit/editor.hpp"
-    "${PROJECT_SOURCE_DIR}/include/rf/edit/key.hpp")
+    "${PROJECT_SOURCE_DIR}/include/rf/edit/key.hpp"
+    "${PROJECT_SOURCE_DIR}/include/rf/edit/shuttle.hpp")
 
 add_library(rf::edit ALIAS rf_edit)
 

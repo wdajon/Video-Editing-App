@@ -32,6 +32,12 @@ constexpr NamedAction kActionNames[] = {
     {Action::select_in_edge, "select_in_edge"},
     {Action::select_out_edge, "select_out_edge"},
 
+    {Action::shuttle_forward, "shuttle_forward"},
+    {Action::shuttle_backward, "shuttle_backward"},
+    {Action::shuttle_stop, "shuttle_stop"},
+    {Action::shuttle_slow_forward, "shuttle_slow_forward"},
+    {Action::shuttle_slow_backward, "shuttle_slow_backward"},
+
     {Action::undo, "undo"},
     {Action::redo, "redo"},
 };
