@@ -8,10 +8,12 @@ add_library(rf_timeline STATIC
     command.cpp
     document.cpp
     serialise.cpp
+    trim.cpp
     "${PROJECT_SOURCE_DIR}/include/rf/timeline/command.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/timeline/document.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/timeline/ids.hpp"
-    "${PROJECT_SOURCE_DIR}/include/rf/timeline/serialise.hpp")
+    "${PROJECT_SOURCE_DIR}/include/rf/timeline/serialise.hpp"
+    "${PROJECT_SOURCE_DIR}/include/rf/timeline/trim.hpp")
 
 add_library(rf::timeline ALIAS rf_timeline)
 

@@ -16,7 +16,7 @@ Repository: https://github.com/wdajon/Video-Editing-App (public)
 | M1 — probe, decode, frame-accurate seek | **Gate met.** 200/200 random seeks correct on a 10-min 4K file. Performance budget **not** met — see D9. |
 | M2 — timeline model + undo/redo | **Gate met.** 10,000-operation fuzz, undo returns byte-identical. |
 | M3 — GPU compositor + playback | **Gate met** 2026-08-05. 1800 frames presented, 0 dropped, p99 36.67 ms, confirmed visually by the project owner. See the caveats in `PROGRESS.md`. |
-| M4 — panels, docking, workspaces, JKL | **Not started.** This is where work resumes. |
+| M4 — panels, docking, workspaces, JKL | **In progress, iteration 1 of 5.** The trim set exists in the model (ADR 009). No keyboard, no panels yet. |
 | M5 onward | Not started. |
 
 Zero warnings at `/W4 /WX` and `-Wall -Wextra -Werror`.
@@ -31,7 +31,7 @@ fact. Get the number from the suite:
 ctest --preset windows-debug
 ```
 
-At the close of M3 (2026-08-05) that was **283**: core 48, media 92, timeline 51,
+At M4 iteration 1 (2026-08-06) that was **327**: core 48, media 92, timeline 95,
 gpu 42, playback 40, app 10. Treat it as a dated snapshot, not a claim about now.
 
 ### Seeing it run
@@ -164,6 +164,11 @@ Full detail in `docs/BACKLOG.md`. The ones that shape upcoming work:
   extraction stays confined to one module.
 - **D8** — every decoded frame is copied out of libav. Correct and portable, and
   too slow for the M3 playback budget. Needs a zero-copy path to the GPU.
+- **D15** — a ripple trims one track. Premiere ripples every sync-locked track
+  together, so a keyboard ripple on V1 leaves a paired A1 clip behind. **This
+  blocks the M4 gate** and is the next thing to fix.
+- **D14** — media length lives on `Clip::source_duration` rather than in a media
+  pool, so two clips cut from one source repeat the value.
 - **D10** — TSan cannot see libav's internal threading, so decoder threading is
   forced to one thread under TSan. The shipping multi-threaded decode path is
   therefore not TSan-covered.

@@ -27,6 +27,9 @@ creep gets refused without losing the idea.
 
 | D13 | M3 i5 | **RESOLVED (M3 i6).** The composite API took CPU pixels and returned CPU pixels synchronously -- about 33 MB across PCIe per frame -- measured at p50 49.9 ms against a 33.3 ms budget. `Compositor::composite_into()` now takes GPU-resident `Texture` layers and writes a GPU `Texture`, with no upload and no readback in the loop: **p50 0.23 ms, p99 0.42 ms, zero drops**, a 217x improvement that confirms the cost was transfers rather than blending. `composite()` remains as the export and golden-frame path and is now implemented on top of `composite_into()`, so the two cannot disagree. Remaining caveat: the bench composites as fast as it can rather than pacing, so its zero-drop result measures capacity, not paced playback. | resolved |
 
+| D14 | M4 i1 | `Clip::source_duration` records the length of a clip's media on the clip itself, so two clips cut from one source repeat the value and nothing enforces that they agree. It is where the field has to live today, because `Clip::source` is a path string and there is no media pool. Fix: a media pool keyed by source, holding the available range, with the clip's span validated against it — the shape OpenTimelineIO uses (`available_range` on the media reference). The invariant moves intact; see ADR 009. | M5 (import needs a media pool anyway) |
+| D15 | M4 i1 | A ripple trims one track only. Premiere ripples every sync-locked track together, so a keyboard ripple on V1 leaves the paired A1 clip behind and the edit goes out of sync. Fix: track sync-lock state, and a ripple that rewrites every locked track in one command — `Document::replace_track_clips` is per-track, so this needs either a compound command or a multi-track primitive. | M4 exit (the gate is a keyboard-only trim workflow, and a desynced edit is not one) |
+
 ## Deferred work
 
 - **vcpkg binary caching in CI** (ADR 001). Clean builds will get slow once
