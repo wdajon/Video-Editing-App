@@ -22,6 +22,55 @@ number comes from the reference machine and is recorded with its hardware, the
 same arrangement as the M1 seek baseline. This is written down because it is
 exactly the kind of distinction that erodes quietly.
 
+### Iteration 7 — paced playback, with real decoded video
+
+**The gate's workload, end to end, on the reference machine:**
+
+```
+scene:   1080x1920, 3 layers, 30 fps for 60 s
+produced 1800 frames in 60.0 s
+decoded:  1800 frames from reels_1080x1920_30fps_60s.mp4
+dropped:  0        late: 0
+interval ms  p50 33.33  p99 35.75  max 37.46  (budget 33.33)
+```
+
+H.264 decode, YUV to RGBA conversion, GPU upload, three-layer composite, paced
+to the clock, sustained for a full minute with nothing dropped. p50 sits exactly
+on the frame period, which is what correct pacing looks like.
+
+Synthetic layers only, without decode, measure p50 33.24 / p99 34.32 — so decode
+and conversion cost roughly 1.4 ms of p99 headroom at this resolution.
+
+**The pacer is what makes the zero-drop claim mean anything.** The previous
+bench composited as fast as it could, never fell behind, and so could not drop a
+frame however slow it was. `Pacer` waits until each frame is due and then
+renders whatever the clock says is current — the gap between "the frame I wanted
+next" and "the frame that should be showing" is exactly what a drop is. Skipping
+to the current frame rather than the stale one is what keeps playback in sync;
+falling one frame further behind on each slow frame would drift without bound.
+Tests cover renderers at half and one-third of the required rate, because a
+pacer that quietly rendered stale frames would look perfect by every other
+measure.
+
+Waiting is part of the `Clock` interface so it can be injected. `ManualClock`
+jumps to the deadline instead of sleeping, which runs a sixty-second paced
+scenario in milliseconds and deterministically, and lets a test simulate a slow
+renderer. It counts sleeps too, so a pacer that spins fails a test rather than
+merely burning a core.
+
+**What this still does not prove.**
+
+1. **Nothing has been presented to a screen.** The gate says *Program monitor*
+   playback; this is a headless paced loop. Presentation is the remaining work.
+2. **The source is `testsrc2`**, which is cheap to decode. Real camera footage
+   at the same resolution carries far more entropy and will cost more. The 4K
+   seek measurement (D9) already shows CPU decode at ~66 fps on 4K, so headroom
+   here should not be read as headroom everywhere.
+3. **YUV to RGBA runs on the CPU** through swscale, per frame. It fits at
+   1080x1920 today. Doing the conversion in the shader by uploading the planes
+   is the eventual answer and is the same class of fix that D13 turned out to
+   need.
+
 ### Iteration 6 — the playback path, and a 217x result
 
 D13 said the shape of the composite API was the problem, not the tuning. Acting

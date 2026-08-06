@@ -16,14 +16,18 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "rf/gpu/compositor.hpp"
 #include "rf/gpu/device.hpp"
 #include "rf/gpu/instance.hpp"
 #include "rf/gpu/texture.hpp"
+#include "rf/media/convert.hpp"
+#include "rf/media/decoder.hpp"
 #include "rf/media/rational.hpp"
 #include "rf/playback/clock.hpp"
 #include "rf/playback/frame_log.hpp"
@@ -38,6 +42,11 @@ struct Options {
     int layers = 3;
     int seconds = 60;
     int fps = 30;
+
+    /// When set, layer 0 comes from this file instead of a synthetic image:
+    /// decode, convert to RGBA, upload, composite. That is the real workload,
+    /// and it is where decode cost shows up against the frame budget.
+    std::string video;
 };
 
 bool parse(int argc, char** argv, Options& options) {
@@ -47,6 +56,10 @@ bool parse(int argc, char** argv, Options& options) {
             std::fprintf(stderr, "missing value for %.*s\n", static_cast<int>(flag.size()),
                          flag.data());
             return false;
+        }
+        if (flag == "--video") {
+            options.video = argv[++i];
+            continue;
         }
         const int value = std::atoi(argv[++i]);
         if (flag == "--width") { options.width = value; }
@@ -184,11 +197,55 @@ int main(int argc, char** argv) {
     // and its zero-drop result measures throughput rather than playback.
     rf::playback::Pacer pacer{wall, clock.value(), log};
 
+    // Opened after the warm-up so the first decode is inside the measurement,
+    // where it belongs -- a decoder that stalls on its first frame is a real
+    // playback defect.
+    std::optional<rf::media::VideoDecoder> decoder;
+    if (!options.video.empty()) {
+        auto opened = rf::media::VideoDecoder::open(options.video);
+        if (!opened) {
+            std::fprintf(stderr, "%s\n", opened.error().to_string().c_str());
+            return 2;
+        }
+        decoder = std::move(opened).value();
+    }
+
+    std::int64_t decoded_frames = 0;
+    std::int64_t exhausted_at = -1;
+
     for (std::int64_t frame = 0; frame < total_frames; ++frame) {
         auto tick = pacer.wait_next();
         if (!tick) {
             std::fprintf(stderr, "%s\n", tick.error().to_string().c_str());
             return 2;
+        }
+
+        if (decoder.has_value()) {
+            auto next = decoder->next_frame();
+            if (!next) {
+                std::fprintf(stderr, "decode failed: %s\n", next.error().to_string().c_str());
+                return 1;
+            }
+            if (next.value().has_value()) {
+                auto rgba = rf::media::to_rgba8(next.value().value());
+                if (!rgba) {
+                    std::fprintf(stderr, "%s\n", rgba.error().to_string().c_str());
+                    return 1;
+                }
+                rf::gpu::ImageRgba8 image;
+                image.width = rgba.value().width();
+                image.height = rgba.value().height();
+                image.pixels = rgba.value().pixels();
+                if (auto uploaded = textures[0].upload(image); !uploaded) {
+                    std::fprintf(stderr, "%s\n", uploaded.error().to_string().c_str());
+                    return 1;
+                }
+                ++decoded_frames;
+            } else if (exhausted_at < 0) {
+                // Running out of source mid-run would otherwise look like a
+                // sudden speed-up, so it is recorded and reported.
+                exhausted_at = frame;
+            }
         }
 
         auto composed = compositor.value().composite_into(target.value(), layers);
@@ -208,6 +265,15 @@ int main(int argc, char** argv) {
 
     std::printf("\nproduced %lld frames in %.1f s\n", static_cast<long long>(stats.presented),
                 std::chrono::duration<double>(elapsed).count());
+    if (!options.video.empty()) {
+        std::printf("decoded:  %lld frames from %s\n", static_cast<long long>(decoded_frames),
+                    options.video.c_str());
+        if (exhausted_at >= 0) {
+            std::printf("  WARNING: source ran out at frame %lld; the rest of the run\n"
+                        "           composited a stale layer and is not representative\n",
+                        static_cast<long long>(exhausted_at));
+        }
+    }
     std::printf("dropped:  %lld\n", static_cast<long long>(stats.dropped));
     std::printf("late:     %lld (later than one frame period)\n",
                 static_cast<long long>(stats.late));

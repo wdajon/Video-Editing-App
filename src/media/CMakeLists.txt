@@ -10,6 +10,7 @@
 find_package(FFMPEG REQUIRED)
 
 add_library(rf_media STATIC
+    convert.cpp
     decoder.cpp
     libav_error.cpp
     media_info.cpp
@@ -19,6 +20,7 @@ add_library(rf_media STATIC
     video_frame.cpp
     libav_error.hpp
     stream_description.hpp
+    "${PROJECT_SOURCE_DIR}/include/rf/media/convert.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/media/decoder.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/media/media_info.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/media/probe.hpp"
