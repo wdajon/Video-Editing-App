@@ -25,15 +25,44 @@ using rf::timeline::Ticks;
 constexpr Ticks kSourceTicks = 1'000'000;
 
 Document make_document() {
-    auto document = Document::create(Rational{1, 90000});
+    auto document = Document::create(Rational{1, 90000}, Rational{30, 1});
     EXPECT_TRUE(document.has_value()) << (document.has_error() ? document.error().to_string() : "");
     return std::move(document).value();
 }
 
 TEST(Document, RejectsAZeroTimeBase) {
-    const auto document = Document::create(Rational{0, 1});
+    const auto document = Document::create(Rational{0, 1}, Rational{30, 1});
     ASSERT_TRUE(document.has_error());
     EXPECT_EQ(document.error().code(), Errc::invalid_argument);
+}
+
+TEST(Document, FrameRateMustDivideTheTickBaseExactly) {
+    // A keyboard trim moves whole frames, so a frame has to be a whole number of
+    // ticks. Rounding here would put a fraction of a frame of drift into every
+    // edit -- the class of error the integer tick model exists to prevent.
+    EXPECT_EQ(Document::create(Rational{1, 90000}, Rational{30, 1}).value().ticks_per_frame(),
+              3000);
+    EXPECT_EQ(Document::create(Rational{1, 90000}, Rational{25, 1}).value().ticks_per_frame(),
+              3600);
+    EXPECT_EQ(Document::create(Rational{1, 90000}, Rational{24, 1}).value().ticks_per_frame(),
+              3750);
+    EXPECT_EQ(
+        Document::create(Rational{1, 90000}, Rational{30000, 1001}).value().ticks_per_frame(),
+        3003)
+        << "29.97 is exact at this base";
+
+    // 23.976 is not: 90000 * 1001 / 24000 is 3753.75. Refused rather than
+    // rounded; ADR 012 records the follow-up.
+    const auto refused = Document::create(Rational{1, 90000}, Rational{24000, 1001});
+    ASSERT_TRUE(refused.has_error());
+    EXPECT_EQ(refused.error().code(), Errc::invalid_argument);
+    EXPECT_NE(refused.error().to_string().find("whole number of ticks"), std::string::npos)
+        << refused.error().to_string();
+}
+
+TEST(Document, RejectsANonPositiveFrameRate) {
+    EXPECT_TRUE(Document::create(Rational{1, 90000}, Rational{0, 1}).has_error());
+    EXPECT_TRUE(Document::create(Rational{1, 90000}, Rational{-30, 1}).has_error());
 }
 
 TEST(Document, StartsEmptyWithIdsUnspent) {

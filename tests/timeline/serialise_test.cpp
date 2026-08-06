@@ -20,7 +20,7 @@ using rf::timeline::serialise;
 constexpr rf::timeline::Ticks kSourceTicks = 1'000'000;
 
 Document make_document() {
-    auto document = Document::create(Rational{1, 90000});
+    auto document = Document::create(Rational{1, 90000}, Rational{30, 1});
     EXPECT_TRUE(document.has_value());
     return std::move(document).value();
 }
@@ -28,8 +28,9 @@ Document make_document() {
 TEST(Serialise, EmptyDocumentCarriesVersionBaseAndCounter) {
     const Document document = make_document();
     EXPECT_EQ(serialise(document),
-              "reelforge/4\n"
+              "reelforge/5\n"
               "timebase 1/90000\n"
+              "framerate 30/1\n"
               "nextid 1\n");
 }
 
@@ -42,8 +43,9 @@ TEST(Serialise, WritesTracksAndClips) {
     ASSERT_TRUE(document.set_track_muted(audio, true).has_value());
 
     EXPECT_EQ(serialise(document),
-              "reelforge/4\n"
+              "reelforge/5\n"
               "timebase 1/90000\n"
+              "framerate 30/1\n"
               "nextid 5\n"
               "track 1 video 0 0 1 \"V1\"\n"
               "  clip 2 100 1000000 0 9000 0 1 \"a.mp4\"\n"
@@ -100,7 +102,7 @@ TEST(Serialise, EscapesCharactersThatCouldForgeARecord) {
     // Exactly one line per record: the escaping must not have emitted a real
     // newline inside a value.
     const auto line_count = std::count(text.begin(), text.end(), '\n');
-    EXPECT_EQ(line_count, 5) << text;
+    EXPECT_EQ(line_count, 6) << text;
 }
 
 TEST(Serialise, ReflectsTheIdCounterSoSpentIdsSurvive) {
@@ -146,9 +148,11 @@ TEST(Serialise, DistinguishesDocumentsThatDifferOnlyBySourceLength) {
 }
 
 TEST(Serialise, RecordsTheTimeBase) {
-    auto ntsc = Document::create(Rational{1001, 30000});
-    ASSERT_TRUE(ntsc.has_value());
+    auto ntsc = Document::create(Rational{1001, 30000}, Rational{30000, 1001});
+    ASSERT_TRUE(ntsc.has_value()) << ntsc.error().to_string();
     EXPECT_NE(serialise(ntsc.value()).find("timebase 1001/30000"), std::string::npos);
+    EXPECT_NE(serialise(ntsc.value()).find("framerate 30000/1001"), std::string::npos)
+        << "the rate is document state, not something a reader can infer from the base";
 }
 
 }  // namespace

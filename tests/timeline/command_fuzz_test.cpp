@@ -105,7 +105,7 @@ std::unique_ptr<rf::timeline::Command> random_command(const Document& document,
 /// Runs `operations` random edits, then undoes all of them, and checks the
 /// document came back exactly.
 void run_fuzz(std::uint64_t seed, int operations, Counters& counters) {
-    auto created = Document::create(Rational{1, 90000});
+    auto created = Document::create(Rational{1, 90000}, Rational{30, 1});
     ASSERT_TRUE(created.has_value());
     Document document = std::move(created).value();
 
@@ -173,7 +173,7 @@ TEST(CommandFuzz, ManySeedsAllUndoCleanly) {
 TEST(CommandFuzz, RedoReproducesTheSameDocumentIdsIncluded) {
     // Undo then redo must land on exactly the document that was undone. A redo
     // that issues fresh ids produces something that looks right and is not.
-    auto created = Document::create(Rational{1, 90000});
+    auto created = Document::create(Rational{1, 90000}, Rational{30, 1});
     ASSERT_TRUE(created.has_value());
     Document document = std::move(created).value();
 
@@ -203,7 +203,7 @@ TEST(CommandFuzz, RedoReproducesTheSameDocumentIdsIncluded) {
 
 TEST(CommandFuzz, UndoRedoCyclesAreStable) {
     // Repeated undo/redo of the same history must not accumulate drift.
-    auto created = Document::create(Rational{1, 90000});
+    auto created = Document::create(Rational{1, 90000}, Rational{30, 1});
     ASSERT_TRUE(created.has_value());
     Document document = std::move(created).value();
 

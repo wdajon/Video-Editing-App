@@ -103,6 +103,22 @@ gtest_discover_tests(rf_timeline_tests
     DISCOVERY_MODE PRE_TEST
     PROPERTIES LABELS "timeline")
 
+add_executable(rf_edit_tests
+    edit/command_map_test.cpp
+    edit/key_test.cpp
+    edit/keyboard_workflow_test.cpp)
+
+target_link_libraries(rf_edit_tests
+    PRIVATE
+        rf::edit
+        rf::warnings
+        GTest::gtest
+        GTest::gtest_main)
+
+gtest_discover_tests(rf_edit_tests
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES LABELS "edit")
+
 if(RF_BUILD_APP)
     set(CMAKE_AUTOMOC ON)
 
