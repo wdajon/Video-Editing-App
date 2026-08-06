@@ -178,6 +178,31 @@ TEST(Instance, PrefersRealHardwareOverASoftwareImplementation) {
         << "chose a software device while real hardware was available";
 }
 
+TEST(Instance, PresentationIsOffUnlessAskedFor) {
+    SKIP_WITHOUT_VULKAN();
+    Instance::Options options;
+    options.enable_presentation = false;
+    auto instance = Instance::create(options);
+    ASSERT_TRUE(instance.has_value()) << instance.error().to_string();
+    EXPECT_FALSE(instance.value().presentation_supported());
+}
+
+TEST(Instance, AskingForPresentationNeverFails) {
+    // A headless machine and a CI runner must both still get an instance, so
+    // export, golden frames and the benchmarks keep working where nothing can
+    // be displayed. Presentation is a reported capability, not a requirement.
+    SKIP_WITHOUT_VULKAN();
+    Instance::Options options;
+    options.enable_presentation = true;
+    auto instance = Instance::create(options);
+    ASSERT_TRUE(instance.has_value())
+        << "requesting presentation must not fail on a headless machine: "
+        << instance.error().to_string();
+
+    // Whichever way it went, the instance has to be usable.
+    EXPECT_TRUE(instance.value().enumerate_devices().has_value());
+}
+
 TEST(Instance, IsMovable) {
     SKIP_WITHOUT_VULKAN();
     Instance instance = make_instance();

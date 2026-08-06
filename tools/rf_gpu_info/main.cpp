@@ -21,6 +21,7 @@ int main() {
 
     rf::gpu::Instance::Options options;
     options.enable_validation = true;
+    options.enable_presentation = true;
 
     auto instance = rf::gpu::Instance::create(options);
     if (!instance) {
@@ -30,6 +31,10 @@ int main() {
 
     std::printf("validation layers: %s\n",
                 instance.value().validation_enabled() ? "enabled" : "unavailable");
+    std::printf("presentation:      %s\n",
+                instance.value().presentation_supported()
+                    ? "supported"
+                    : "unavailable (headless; export and rendering still work)");
 
     auto devices = instance.value().enumerate_devices();
     if (!devices) {

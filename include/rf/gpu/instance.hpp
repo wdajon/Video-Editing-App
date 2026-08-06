@@ -30,6 +30,15 @@ public:
         /// defects. Requested in debug and sanitizer builds; their absence is
         /// not an error, because ADR 007 deliberately does not require the SDK.
         bool enable_validation = false;
+
+        /// Enables the surface extensions needed to put frames on a screen.
+        ///
+        /// Which ones exist is discovered from the loader rather than assumed
+        /// per platform (ADR 008), so asking for presentation on a machine that
+        /// cannot present is not an error -- the instance is created without
+        /// them and `presentation_supported()` reports false. Export, golden
+        /// frames and the benchmarks must keep working on such a machine.
+        bool enable_presentation = false;
     };
 
     [[nodiscard]] static Result<Instance> create(const Options& options);
@@ -52,6 +61,11 @@ public:
     /// True when validation layers were actually enabled, which is not the same
     /// as having asked for them.
     [[nodiscard]] bool validation_enabled() const noexcept;
+
+    /// True when the surface extensions needed for presentation were enabled.
+    /// False on a headless machine, in CI, and whenever `enable_presentation`
+    /// was not requested.
+    [[nodiscard]] bool presentation_supported() const noexcept;
 
 private:
     class Impl;

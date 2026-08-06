@@ -17,6 +17,7 @@ class Instance::Impl {
 public:
     VkInstance instance = VK_NULL_HANDLE;
     bool validation = false;
+    bool presentation = false;
 
     Impl() = default;
     Impl(const Impl&) = delete;

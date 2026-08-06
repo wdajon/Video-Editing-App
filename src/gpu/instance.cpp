@@ -71,6 +71,47 @@ bool initialise_volk() {
     });
 }
 
+/// Instance extension names that exist on the machine, from the ones we might
+/// want. Discovering rather than hardcoding per platform means a headless
+/// machine simply reports none, which is the correct outcome (ADR 008).
+[[nodiscard]] std::vector<const char*> available_extensions(
+    const std::vector<const char*>& wanted) {
+    std::uint32_t count = 0;
+    if (vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr) != VK_SUCCESS ||
+        count == 0) {
+        return {};
+    }
+    std::vector<VkExtensionProperties> present(count);
+    if (vkEnumerateInstanceExtensionProperties(nullptr, &count, present.data()) != VK_SUCCESS) {
+        return {};
+    }
+
+    std::vector<const char*> found;
+    for (const char* name : wanted) {
+        const bool exists =
+            std::any_of(present.begin(), present.end(), [name](const VkExtensionProperties& e) {
+                return std::strcmp(e.extensionName, name) == 0;
+            });
+        if (exists) {
+            found.push_back(name);
+        }
+    }
+    return found;
+}
+
+/// Every surface extension ReelForge can make use of. The platform-specific one
+/// that actually exists is whichever the loader reports.
+[[nodiscard]] std::vector<const char*> surface_extension_candidates() {
+    return {
+        "VK_KHR_surface",
+        "VK_KHR_win32_surface",
+        "VK_KHR_xcb_surface",
+        "VK_KHR_xlib_surface",
+        "VK_KHR_wayland_surface",
+        "VK_EXT_metal_surface",
+    };
+}
+
 /// Ranks device kinds for automatic selection. Software last: it is a correct
 /// Vulkan implementation and about two orders of magnitude too slow to play
 /// back with, so it must never be chosen over real hardware.
@@ -118,11 +159,26 @@ Result<Instance> Instance::create(const Options& options) {
         layers.push_back(kValidationLayer);
     }
 
+    // A machine with no display reports no surface extensions, so this comes
+    // back empty and the instance is created without presentation support
+    // rather than failing (ADR 008).
+    std::vector<const char*> extensions;
+    if (options.enable_presentation) {
+        extensions = available_extensions(surface_extension_candidates());
+        // VK_KHR_surface alone cannot present anything; a platform surface
+        // extension has to be there too, or this is a headless machine.
+        if (extensions.size() < 2) {
+            extensions.clear();
+        }
+    }
+
     VkInstanceCreateInfo create{};
     create.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     create.pApplicationInfo = &application;
     create.enabledLayerCount = static_cast<std::uint32_t>(layers.size());
     create.ppEnabledLayerNames = layers.empty() ? nullptr : layers.data();
+    create.enabledExtensionCount = static_cast<std::uint32_t>(extensions.size());
+    create.ppEnabledExtensionNames = extensions.empty() ? nullptr : extensions.data();
 
     auto impl = std::make_shared<Impl>();
     const VkResult result = vkCreateInstance(&create, nullptr, &impl->instance);
@@ -130,6 +186,7 @@ Result<Instance> Instance::create(const Options& options) {
         return from_vulkan(result, "cannot create a Vulkan instance");
     }
     impl->validation = validation;
+    impl->presentation = !extensions.empty();
 
     // Loading instance-level entry points here means later calls go straight to
     // the driver rather than through the loader's dispatch trampoline.
@@ -140,6 +197,10 @@ Result<Instance> Instance::create(const Options& options) {
 
 bool Instance::validation_enabled() const noexcept {
     return impl_->validation;
+}
+
+bool Instance::presentation_supported() const noexcept {
+    return impl_->presentation;
 }
 
 Result<std::vector<DeviceInfo>> Instance::enumerate_devices() const {
