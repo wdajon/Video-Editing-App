@@ -88,7 +88,9 @@ add_executable(rf_timeline_tests
     timeline/command_fuzz_test.cpp
     timeline/command_test.cpp
     timeline/document_test.cpp
-    timeline/serialise_test.cpp)
+    timeline/serialise_test.cpp
+    timeline/trim_test.cpp
+    timeline/trim_fuzz_test.cpp)
 
 target_link_libraries(rf_timeline_tests
     PRIVATE

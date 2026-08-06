@@ -1,5 +1,73 @@
 # Progress
 
+## M4 — Premiere-style panels, docking, workspaces, JKL
+
+**Exit gate:** the full trim set (ripple/roll/slip/slide) driven by keyboard
+only.
+
+**Gate status: not met.** Iteration 1 delivers the four operations and their
+limits in the model. Nothing is bound to a key yet, and there are no panels.
+
+### Iteration 1 — the trim set, and the media limit that makes it honest
+
+**Increment:** ripple, roll, slip and slide as undoable commands in `rf_timeline`,
+with the reachable range of each computed exactly. **Falsifiable check:** each
+operation asserted against the definitions in ADR 009 on a fixed fixture, plus a
+property fuzz over 200 random tracks asserting that no trim leaves an illegal
+document, that undoing everything returns byte-identical bytes, and that each
+operation preserves what its definition says it preserves.
+
+Before a key can be bound to a trim, the trim has to know where to stop — and it
+could not. `Clip` recorded `source_in` and `duration` and nothing said how much
+media the source had, so a slip could walk past the end of the file and the
+failure would surface during playback as a missing picture rather than as a
+refused edit. `Clip::source_duration` closes that, and the document now enforces
+`0 <= source_in && source_in + duration <= source_duration` on every mutation.
+The project format goes to version 2 for the new field.
+
+Three of the four operations move more than one clip, and a half-applied trim
+cannot be undone. `Document::replace_track_clips()` takes a whole new clip vector
+for one track, validates all of it, and installs it only if every check passes;
+the commands capture the previous vector and revert by putting it back. Atomicity
+and exact inversion are properties of the primitive rather than promises each
+command has to keep.
+
+```
+100% tests passed, 0 tests failed out of 327     (windows-debug)
+100% tests passed, 0 tests failed out of 327     (windows-release)
+
+timeline = 95 tests (was 51)
+[trim fuzz] documents=200 applied=4393 refused=3607
+```
+
+Zero warnings at `/W4 /WX`. The refusals in the fuzz are real: a roll needs a
+butt-joined neighbour, and a clip already at its media limit has nowhere to go.
+
+**A defect found by writing the critique, not by a test.** The first `TrimRange`
+used `std::optional` bounds, with `nullopt` meaning unbounded, on the reasoning
+that a clip with nothing after it can slide right forever. That was wrong twice:
+a tick is an `std::int64_t`, so the limit is real rather than absent, and leaving
+it out let `start += delta` overflow for a delta the range had just declared
+legal. The fix was to the API rather than to the caller — `Document` now refuses
+a clip whose `start + duration` is not representable, which makes the bound
+derivable, and every range is a plain pair of integers. `Trim.ASlideToThe
+RepresentableLimitDoesNotOverflow` covers the case that used to be UB.
+
+**What this iteration does not deliver.**
+
+1. **No keyboard, no panels.** The gate says *driven by keyboard only*. This is
+   the model layer; the command map, JKL and the docking workspace are the rest
+   of M4.
+2. **A ripple trims one track** (D15). Premiere ripples every sync-locked track
+   together, so a keyboard ripple on V1 would leave a paired A1 clip behind. This
+   blocks the M4 gate and is the next thing to fix.
+3. **Media length lives on the clip** (D14), not in a media pool, so two clips
+   cut from one source repeat the value with nothing enforcing that they agree.
+
+### Next action
+
+D15: sync-locked ripple across tracks, then the command map.
+
 ## M3 — GPU compositor + Program monitor playback
 
 **Exit gate:** 1080x1920, 3 layers, sustained 30 fps playback, no dropped frames
