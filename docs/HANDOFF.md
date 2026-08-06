@@ -15,27 +15,42 @@ Repository: https://github.com/wdajon/Video-Editing-App (public)
 | M0 — repo, CMake, deps, CI, Qt shell | **Gate met.** Six-job CI matrix green. |
 | M1 — probe, decode, frame-accurate seek | **Gate met.** 200/200 random seeks correct on a 10-min 4K file. Performance budget **not** met — see D9. |
 | M2 — timeline model + undo/redo | **Gate met.** 10,000-operation fuzz, undo returns byte-identical. |
-| M3 — GPU compositor + playback | **In progress, 3 iterations.** Gate not met. |
+| M3 — GPU compositor + playback | **Gate NOT met.** Compositing is correct and fast enough (p50 0.23 ms against a 33.33 ms budget). Missing: presentation to a screen, and a paced playback loop. |
 | M4 onward | Not started. |
 
 249 tests. Zero warnings at `/W4 /WX` and `-Wall -Wextra -Werror`.
 
 ### What M3 still needs
 
-The gate was measured, not guessed: p50 49.90 ms against a 33.33 ms budget at
-1080x1920 with three layers, 856 frames dropped over 60 s on the RTX 3070.
+**Compositing throughput is solved (D13, closed).** `Compositor::composite_into()`
+takes GPU-resident `Texture` layers and writes a GPU `Texture` — no upload, no
+readback in the loop. Measured on the RTX 3070 at **p50 0.23 ms, p99 0.42 ms,
+zero drops**, against a 33.33 ms budget: a 217x improvement over the CPU-pixels
+API, which had measured p50 49.90 ms with 856 frames dropped. The cost was
+transfers all along, never the blending.
 
-1. **A playback entry point that is not `Compositor::composite()` (D13).** That
-   API takes CPU pixels and returns CPU pixels synchronously -- about 33 MB
-   across PCIe per frame with no overlap. A scaling experiment showed cost
-   tracks pixels rather than dispatches: a fixed ~33 ms for readback and stall,
-   plus ~5 ms per layer upload. Caching per-frame resources recovered only 4 ms,
-   so this is not a tuning problem. Needs GPU-resident frames, presentation
-   without readback, and frames in flight. The existing API stays as the export
-   and golden-frame path, where its shape is correct.
-2. **Present to the Program monitor** (swapchain) -- first code needing a window.
+`Compositor::composite()` (CPU pixels in and out) is kept for export and golden
+frames, and is implemented on top of `composite_into()` so the two cannot
+disagree.
+
+Three things remain:
+
+1. **A paced playback loop.** `rf_playback_bench` composites as fast as it can
+   rather than waiting until each frame is due, so it never falls behind and its
+   zero-drop result measures *capacity*, not paced playback. The gate's claim
+   needs a loop that actually paces, and `FrameLog` already defines what a drop
+   is (ADR 006).
+2. **Present to the Program monitor** (swapchain) — the first code needing a
+   window, and the point at which pacing should block on present rather than on
+   a clock.
 3. **Hardware-accelerated decode.** Still on the critical path: CPU decode
    manages ~66 fps on 4K and three layers at 30 fps needs 90. Also what D9 needs.
+
+Run the measurement with:
+
+```powershell
+.\build\windows-release\bin\rf_playback_bench.exe --width 1080 --height 1920 --layers 3 --fps 30 --seconds 60
+```
 
 ---
 
@@ -141,4 +156,17 @@ These were arrived at the hard way and are visible throughout the codebase.
   corrected.
 - **State what a test does not prove.** Fixture READMEs and ADRs say plainly
   where coverage stops — synthetic media has no VFR or broken timestamps,
-  lavapipe says nothing about frame rate.
+  lavapipe says nothing about frame rate, and the playback bench measures
+  capacity rather than paced playback.
+- **Measure before optimising, and again after.** Every performance guess made
+  in this project was wrong by at least 4x in one direction or the other. The
+  4K seek fix, the composite fix, and the threading change were all sized
+  correctly only after measurement.
+- **Do not edit files with shell text substitution.** PowerShell 5.1 reads UTF-8
+  as ANSI, so `Get-Content -Raw` piped to `Set-Content -Encoding utf8`
+  double-encodes every non-ASCII character and adds a BOM. It corrupted 92
+  characters across three documents here. Worse, a `-replace` whose pattern
+  contains one of those characters then silently matches nothing and reports
+  success — two edits in this project were lost that way. Use editing tools that
+  preserve encoding, and check the file afterwards rather than trusting an exit
+  code.
