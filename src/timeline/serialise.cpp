@@ -45,6 +45,10 @@ std::string serialise(const Document& document) {
     out.append(document.time_base().to_string());
     out.push_back('\n');
 
+    out.append("framerate ");
+    out.append(document.frame_rate().to_string());
+    out.push_back('\n');
+
     // The id counter is state, not bookkeeping: two documents that differ only
     // in which ids have been spent are different documents, because their next
     // edits will differ. See docs/adr/005-timeline-model-and-undo.md.

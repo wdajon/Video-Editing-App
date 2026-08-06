@@ -83,11 +83,21 @@ struct TrackClips {
 /// The whole edit.
 class Document {
 public:
-    /// Creates an empty document with the given tick base, e.g. 1/90000.
-    /// Fails on a zero base, which would make every timestamp meaningless.
-    [[nodiscard]] static Result<Document> create(const media::Rational& time_base);
+    /// Creates an empty document with the given tick base, e.g. 1/90000, and
+    /// sequence frame rate, e.g. 30000/1001.
+    ///
+    /// Fails on a zero base, which would make every timestamp meaningless, and
+    /// on a frame rate whose period is not a whole number of ticks -- see
+    /// docs/adr/012-command-map.md. That refusal is what makes a keyboard trim
+    /// of "one frame" land on a frame boundary exactly rather than by rounding.
+    [[nodiscard]] static Result<Document> create(const media::Rational& time_base,
+                                                 const media::Rational& frame_rate);
 
     [[nodiscard]] const media::Rational& time_base() const noexcept { return time_base_; }
+    [[nodiscard]] const media::Rational& frame_rate() const noexcept { return frame_rate_; }
+
+    /// Length of one frame, in ticks. Exact by construction.
+    [[nodiscard]] Ticks ticks_per_frame() const noexcept { return ticks_per_frame_; }
     [[nodiscard]] const std::vector<Track>& tracks() const noexcept { return tracks_; }
 
     /// Value of the id counter. Part of the document's state, and serialised,
@@ -213,6 +223,8 @@ private:
     static void sort_clips(Track& track);
 
     media::Rational time_base_{1, 90000};
+    media::Rational frame_rate_{30, 1};
+    Ticks ticks_per_frame_ = 3000;
     std::vector<Track> tracks_;
     std::uint64_t next_id_ = 1;  // 0 is the null id and is never issued.
 };

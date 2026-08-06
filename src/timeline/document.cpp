@@ -26,7 +26,8 @@ std::string_view to_string(TrackKind kind) noexcept {
     return "video";
 }
 
-Result<Document> Document::create(const media::Rational& time_base) {
+Result<Document> Document::create(const media::Rational& time_base,
+                                  const media::Rational& frame_rate) {
     if (time_base.is_zero()) {
         return Error{Errc::invalid_argument,
                      "document time base cannot be zero; every timestamp would be meaningless"};
@@ -34,8 +35,35 @@ Result<Document> Document::create(const media::Rational& time_base) {
     if (time_base.numerator() < 0) {
         return Error{Errc::invalid_argument, "document time base cannot be negative"};
     }
+    if (frame_rate.is_zero() || frame_rate.numerator() < 0) {
+        return Error{Errc::invalid_argument, "document frame rate must be positive"};
+    }
+
+    // One frame lasts 1/frame_rate seconds, which is
+    // (time_base.den * frame_rate.den) / (time_base.num * frame_rate.num) ticks.
+    // Requiring that to be a whole number is what keeps a keyboard trim of one
+    // frame exact; rounding here would put a fraction of a frame of drift into
+    // every edit. See docs/adr/012-command-map.md.
+    const Result<media::Rational> period = time_base.inverse();
+    if (!period) {
+        return period.error();
+    }
+    const Result<media::Rational> frames_worth = period.value().divided_by(frame_rate);
+    if (!frames_worth) {
+        return frames_worth.error().with_context("frame rate against time base");
+    }
+    const media::Rational& per_frame = frames_worth.value();
+    if (per_frame.denominator() != 1 || per_frame.numerator() < 1) {
+        return Error{Errc::invalid_argument,
+                     "a frame at " + frame_rate.to_string() + " is " + per_frame.to_string() +
+                         " ticks at a time base of " + time_base.to_string() +
+                         "; it must be a whole number of ticks"};
+    }
+
     Document document;
     document.time_base_ = time_base;
+    document.frame_rate_ = frame_rate;
+    document.ticks_per_frame_ = per_frame.numerator();
     return document;
 }
 

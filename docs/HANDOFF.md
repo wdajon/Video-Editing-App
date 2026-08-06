@@ -16,7 +16,7 @@ Repository: https://github.com/wdajon/Video-Editing-App (public)
 | M1 — probe, decode, frame-accurate seek | **Gate met.** 200/200 random seeks correct on a 10-min 4K file. Performance budget **not** met — see D9. |
 | M2 — timeline model + undo/redo | **Gate met.** 10,000-operation fuzz, undo returns byte-identical. |
 | M3 — GPU compositor + playback | **Gate met** 2026-08-05. 1800 frames presented, 0 dropped, p99 36.67 ms, confirmed visually by the project owner. See the caveats in `PROGRESS.md`. |
-| M4 — panels, docking, workspaces, JKL | **In progress, iteration 3 of 5.** The trim model is complete — the four operations, sync lock and linked clips (ADR 009, 010, 011). No keyboard, no panels yet; that is the rest of the gate. |
+| M4 — panels, docking, workspaces, JKL | **In progress, iteration 4 of 5.** Trim model complete, and reachable from key chords through `rf_edit` (ADR 009–012), verified headless. No window wiring, no panels, no JKL. |
 | M5 onward | Not started. |
 
 Zero warnings at `/W4 /WX` and `-Wall -Wextra -Werror`.
@@ -31,8 +31,9 @@ fact. Get the number from the suite:
 ctest --preset windows-debug
 ```
 
-At M4 iteration 3 (2026-08-06) that was **360**: core 48, media 92, timeline 128,
-gpu 42, playback 40, app 10. Treat it as a dated snapshot, not a claim about now.
+At M4 iteration 4 (2026-08-06) that was **403**: core 48, media 92, timeline 130,
+edit 41, gpu 42, playback 40, app 10. Treat it as a dated snapshot, not a claim
+about now.
 
 ### Seeing it run
 
@@ -164,6 +165,11 @@ Full detail in `docs/BACKLOG.md`. The ones that shape upcoming work:
   extraction stays confined to one module.
 - **D8** — every decoded frame is copied out of libav. Correct and portable, and
   too slow for the M3 playback budget. Needs a zero-copy path to the GPU.
+- **D22 / D21** — no panels, docking or workspaces, and no JKL. `rf_edit` proves
+  the keyboard workflow headless; nothing routes a real `QKeyEvent` into it.
+  **These are what remain of the M4 gate.**
+- **D20** — a 1/90000 tick base cannot express 23.976 fps, so such a project
+  cannot be created. Refused rather than rounded; needs a base like flicks.
 - **D18** — a desynced link is invisible. A ripple upstream can legitimately pull
   a linked pair apart when the user has unlocked one track's sync; Premiere shows
   a red out-of-sync indicator and ReelForge shows nothing. **Open against the M4

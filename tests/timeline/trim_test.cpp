@@ -43,7 +43,7 @@ using rf::timeline::trim_range;
 ///   clip uses:           [100 ....... 200)
 ///   timeline:       A[0,100) B[100,200) C[200,300)
 struct Fixture {
-    Document document = Document::create(Rational{1, 90000}).value();
+    Document document = Document::create(Rational{1, 90000}, Rational{30, 1}).value();
     TrackId track;
     ClipId a;
     ClipId b;
@@ -178,7 +178,7 @@ TEST(Trim, ASlideToTheRepresentableLimitDoesNotOverflow) {
 }
 
 TEST(TrimRangeTest, ARangeWithNoRoomIsEmptyRatherThanAnError) {
-    Document document = Document::create(Rational{1, 90000}).value();
+    Document document = Document::create(Rational{1, 90000}, Rational{30, 1}).value();
     const TrackId track = document.add_track(TrackKind::video, "V1").value();
     // Consumes its source exactly: nothing to slip into, either way.
     const ClipId clip = document.add_clip(track, "a.mp4", 0, 0, 100, 100).value();
@@ -330,7 +330,7 @@ TEST(Trim, ClampsToTheLimitRatherThanRefusingWholesale) {
 }
 
 TEST(Trim, RefusesATrimWithNoRoomAndLeavesNoUndoEntry) {
-    Document document = Document::create(Rational{1, 90000}).value();
+    Document document = Document::create(Rational{1, 90000}, Rational{30, 1}).value();
     const TrackId track = document.add_track(TrackKind::video, "V1").value();
     const ClipId clip = document.add_clip(track, "a.mp4", 0, 0, 100, 100).value();
     const std::string before = serialise(document);
