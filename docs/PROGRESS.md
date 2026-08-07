@@ -456,11 +456,49 @@ edit = 63, app = 73
 `nudge` joined `TrimKind`, so moving a clip reuses the atomicity, link-group and
 undo machinery the trims already had rather than growing a second path.
 
+### Iteration 10 — the Tools strip becomes a tool strip
+
+A screenshot showed what iteration 8 actually produced: a full-width column of
+two dozen buttons expanding to fill the window, with the Timeline squeezed behind
+it and clip names overlapping button labels. The panel had eaten the application.
+
+**The strip now holds tools; the menu bar holds commands.** Trim, nudge, slip,
+slide, selection movement, transport and undo are under Clip, Sequence, Playback
+and Edit — where Premiere keeps them and where a shortcut reads off a menu entry.
+The strip's width is *fixed*, not merely preferred: an expanding size policy is
+what swallowed the window, and a layout that cannot do it again beats a comment
+asking the next person not to.
+
+**Tools that share a slot share a button, with a flyout**, as asked for. Ripple
+with rolling, slip with slide. `QToolButton::DelayedPopup` is exactly "click to
+use, click and hold for the rest" — no custom timer, no reimplemented menu. A key
+press moves the slot too, or the strip would claim one tool was active while
+showing another's icon.
+
+Only tools that do something: selection, ripple, rolling, slip, slide. Razor,
+rate stretch, pen, hand, zoom and type are absent rather than inert — M0's rule
+about panels that show nothing applies hardest in a tool strip. Icons are drawn
+in a few lines of `QPainter` each, so there are no image files to keep in step.
+
+**The Timeline is now the central widget.** A `QMainWindow` with no central
+widget gives the leftover space to nothing, which is why a dead band ran across
+the window with the Timeline pinned to the bottom.
+
+```
+100% tests passed, 0 tests failed out of 494     (windows-debug)
+100% tests passed, 0 tests failed out of 494     (windows-release)
+```
+
+**`reelforge --screenshot <file>` was added, and it earned its place
+immediately.** Two layout defects in a row reached the project owner because
+nothing in a test suite can see that a panel has covered the application. The
+first render caught the dead band before it shipped. It works on the offscreen
+platform, so it needs no display.
+
 ### Next action
 
-Still not code I can write: CI against iterations 4–9, and the owner running
-`reelforge --demo-timeline` — this time slip and slide move on one keypress, and
-clips can be dragged.
+Still not code I can write: CI against iterations 4–10, and the owner running
+`reelforge --demo-timeline` to say whether the strip and the mouse feel right.
 
 ## M3 — GPU compositor + Program monitor playback
 

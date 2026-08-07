@@ -35,6 +35,17 @@ int main(int argc, char** argv) {
         QStringLiteral("demo-timeline"),
         QStringLiteral("Start with a timeline to try the keyboard against."));
     parser.addOption(demo);
+
+    // Renders the window to a file and exits. The Timeline and the Tools strip
+    // have no automated oracle (D23), and "the panel swallowed the window" is
+    // exactly the kind of defect a person spots instantly and no assertion
+    // catches. This is the mechanical half of looking at it, and it works on the
+    // offscreen platform, so it can be run without a display.
+    const QCommandLineOption screenshot(
+        QStringLiteral("screenshot"),
+        QStringLiteral("Render the window to <file> as PNG and exit."),
+        QStringLiteral("file"));
+    parser.addOption(screenshot);
     parser.process(app);
 
     if (parser.isSet(play)) {
@@ -72,5 +83,19 @@ int main(int argc, char** argv) {
     }
 
     window.show();
+
+    if (parser.isSet(screenshot)) {
+        // One event loop pass so the layout settles before the grab; otherwise
+        // the image shows widgets at their pre-layout sizes.
+        QApplication::processEvents();
+        const QString path = parser.value(screenshot);
+        if (!window.grab().save(path, "PNG")) {
+            std::fprintf(stderr, "could not write %s\n", path.toStdString().c_str());
+            return 1;
+        }
+        std::printf("wrote %s\n", path.toStdString().c_str());
+        return 0;
+    }
+
     return QApplication::exec();
 }

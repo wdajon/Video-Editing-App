@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "rf/app/timeline_panel.hpp"
 #include "rf/app/tool_palette.hpp"
@@ -75,22 +76,23 @@ MainWindow::MainWindow(QWidget* parent)
     // only one with something to draw. Empty docks standing in for Project,
     // Source and Effect Controls would look finished and show nothing --
     // docs/adr/013-panels-and-workspaces.md.
-    auto* timeline_dock = new QDockWidget(tr("Timeline"), this);
-    // Qt keys its saved layout state on objectName. A dock without a stable one
-    // silently loses its position on restore, which reads as a layout bug rather
-    // than a naming one.
-    timeline_dock->setObjectName("rf_dock_timeline");
+    // The Timeline is the central widget rather than a dock. A QMainWindow with
+    // no central widget gives the leftover space to nothing, which left a large
+    // empty band across the window with the Timeline squeezed into a strip at
+    // the bottom. It is also the one panel always on screen in an editor.
+    // Revisit when the Program monitor can be embedded (D25) and the centre has
+    // a rival.
     timeline_panel_ = new TimelinePanel(document_, stack_, edit_state_, command_map_, this);
-    timeline_dock->setWidget(timeline_panel_);
-    addDockWidget(Qt::BottomDockWidgetArea, timeline_dock);
+    setCentralWidget(timeline_panel_);
 
     connect(timeline_panel_, &TimelinePanel::document_changed, this, [this] {
         modified_ = true;
         refresh_title();
     });
-    // Premiere puts its tools in a palette you can click, and hovering one tells
-    // you its key. That is how a keyboard-first application stays learnable --
-    // the mouse is how you find out what the keys are.
+    // A narrow strip of tool icons, as Premiere has. Everything that is not a
+    // tool is in the menus below instead: the strip is a tool chooser, and an
+    // earlier version that listed every command as a full-width button expanded
+    // to fill the window and pushed the Timeline out of sight.
     auto* tools_dock = new QDockWidget(tr("Tools"), this);
     tools_dock->setObjectName("rf_dock_tools");
     tool_palette_ = new ToolPalette(command_map_, this);
@@ -105,7 +107,6 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(timeline_panel_, &TimelinePanel::edit_state_changed, this, [this] {
         tool_palette_->set_active_tool(edit_state_.tool);
-        tool_palette_->set_active_edge(edit_state_.edge);
         refresh_state_label();
         // Clicking a button moves focus to it, and the next keystroke would go
         // to the button rather than the timeline. Handing focus back is what
@@ -153,11 +154,73 @@ MainWindow::MainWindow(QWidget* parent)
     statusBar()->addPermanentWidget(state_label_);
     refresh_state_label();
 
+    // Every command that is not a tool, where Premiere keeps them and where the
+    // shortcut can be read off. These do not register a QKeySequence: the panel
+    // resolves keys through the command map, and a second key path would mean
+    // remapping a key changed the menu's label and not its behaviour.
+    QMenu* clip_menu = menuBar()->addMenu(tr("&Clip"));
+    clip_menu->setObjectName("rf_menu_clip");
+    add_command(clip_menu, edit::Action::nudge_backward, tr("Nudge Left"));
+    add_command(clip_menu, edit::Action::nudge_forward, tr("Nudge Right"));
+    clip_menu->addSeparator();
+    add_command(clip_menu, edit::Action::slip_backward, tr("Slip Left"));
+    add_command(clip_menu, edit::Action::slip_forward, tr("Slip Right"));
+    add_command(clip_menu, edit::Action::slide_backward, tr("Slide Left"));
+    add_command(clip_menu, edit::Action::slide_forward, tr("Slide Right"));
+
+    QMenu* sequence_menu = menuBar()->addMenu(tr("&Sequence"));
+    sequence_menu->setObjectName("rf_menu_sequence");
+    add_command(sequence_menu, edit::Action::select_in_edge, tr("Trim the In Point"));
+    add_command(sequence_menu, edit::Action::select_out_edge, tr("Trim the Out Point"));
+    sequence_menu->addSeparator();
+    add_command(sequence_menu, edit::Action::trim_backward, tr("Trim Back 1 Frame"));
+    add_command(sequence_menu, edit::Action::trim_forward, tr("Trim Forward 1 Frame"));
+    add_command(sequence_menu, edit::Action::trim_backward_many, tr("Trim Back 5 Frames"));
+    add_command(sequence_menu, edit::Action::trim_forward_many, tr("Trim Forward 5 Frames"));
+    sequence_menu->addSeparator();
+    add_command(sequence_menu, edit::Action::select_previous_clip, tr("Select Previous Clip"));
+    add_command(sequence_menu, edit::Action::select_next_clip, tr("Select Next Clip"));
+    add_command(sequence_menu, edit::Action::select_previous_track, tr("Select Track Above"));
+    add_command(sequence_menu, edit::Action::select_next_track, tr("Select Track Below"));
+
+    QMenu* playback_menu = menuBar()->addMenu(tr("&Playback"));
+    playback_menu->setObjectName("rf_menu_playback");
+    add_command(playback_menu, edit::Action::play_stop, tr("Play / Stop"));
+    add_command(playback_menu, edit::Action::step_backward, tr("Step Back"));
+    add_command(playback_menu, edit::Action::step_forward, tr("Step Forward"));
+    playback_menu->addSeparator();
+    add_command(playback_menu, edit::Action::shuttle_backward, tr("Shuttle Backward"));
+    add_command(playback_menu, edit::Action::shuttle_stop, tr("Shuttle Stop"));
+    add_command(playback_menu, edit::Action::shuttle_forward, tr("Shuttle Forward"));
+
+    QMenu* edit_menu = menuBar()->addMenu(tr("&Edit"));
+    edit_menu->setObjectName("rf_menu_edit");
+    add_command(edit_menu, edit::Action::undo, tr("Undo"));
+    add_command(edit_menu, edit::Action::redo, tr("Redo"));
+
     // The keyboard workflow starts here: without focus the panel never sees a
     // key press, and every trim in M4's gate is a key press.
     timeline_panel_->setFocus();
 
     refresh_title();
+}
+
+void MainWindow::add_command(QMenu* menu, edit::Action action, const QString& text) {
+    const std::vector<edit::KeyChord> chords = command_map_.chords_for(action);
+    const QString shortcut =
+        chords.empty() ? QString{} : QString::fromStdString(edit::to_string(chords.front()));
+
+    QAction* entry = menu->addAction(
+        shortcut.isEmpty() ? text : QStringLiteral("%1\t%2").arg(text, shortcut));
+    // A menu entry performs the action; it does not reimplement one. Same call
+    // as a key press and a tool click.
+    connect(entry, &QAction::triggered, this,
+            [this, action] { timeline_panel_->perform(action); });
+    command_actions_.insert(static_cast<int>(action), entry);
+}
+
+QAction* MainWindow::menu_action_for(edit::Action action) const {
+    return command_actions_.value(static_cast<int>(action), nullptr);
 }
 
 void MainWindow::refresh_state_label() {

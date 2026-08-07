@@ -1,14 +1,15 @@
-// Buttons for everything the keyboard can do, each showing its own shortcut.
+// The Tools strip: a narrow column of icons, as Premiere has.
 //
-// Premiere puts its tools in a palette you can click, and hovering one tells you
-// its key. That is how a keyboard-first application stays learnable: the mouse
-// is the way you find out what the keys are.
+// Only tools live here. An earlier version listed every command as a full-width
+// button, which swallowed the window and buried the Timeline behind it -- the
+// panel is a tool chooser, not a menu. Everything else moved to the menu bar,
+// which is where Premiere keeps it and where a shortcut can be read off.
 //
-// Every button performs an `Action` -- the same enumeration a key press resolves
-// to -- so a button and its shortcut cannot drift apart. The label is read from
-// the live `CommandMap` rather than written next to the button, so a remapped
-// key relabels itself and a button can never claim a shortcut that no longer
-// works. See docs/adr/015-tool-palette.md.
+// Tools that share a slot -- ripple and rolling, slip and slide -- sit behind
+// one button. Clicking it uses the tool showing; clicking and holding opens a
+// flyout to change which one that is, exactly as Premiere does.
+//
+// See docs/adr/017-tools-strip.md.
 
 #ifndef RF_APP_TOOL_PALETTE_HPP
 #define RF_APP_TOOL_PALETTE_HPP
@@ -22,7 +23,8 @@
 #include "rf/edit/action.hpp"
 #include "rf/edit/command_map.hpp"
 
-class QAbstractButton;
+class QAction;
+class QToolButton;
 class QVBoxLayout;
 
 namespace rf::app {
@@ -33,31 +35,30 @@ class ToolPalette : public QWidget {
 public:
     ToolPalette(const edit::CommandMap& map, QWidget* parent = nullptr);
 
-    /// Marks `tool` as the active one, so the palette shows what a trim key
-    /// would do. Called by the window whenever the edit state changes, from a
-    /// key press as readily as from a click.
+    /// Marks `tool` as active, and makes its slot show it. Called whenever the
+    /// edit state changes, from a key as readily as from a click.
     void set_active_tool(edit::Tool tool);
 
-    /// Marks which edge a ripple or roll would move.
-    void set_active_edge(edit::Edge edge);
+    /// The slot button a tool lives in. Several tools share one.
+    [[nodiscard]] QToolButton* button_for(edit::Action action) const;
 
-    /// The button bound to `action`, for tests and for anything that needs to
-    /// drive the palette without a mouse. Null if the action has no button.
-    [[nodiscard]] QAbstractButton* button_for(edit::Action action) const;
+    /// The flyout entry for a tool, which is how a shared slot is changed.
+    [[nodiscard]] QAction* menu_action_for(edit::Action action) const;
 
-    /// Text shown on the button for `action`, including its shortcut.
+    /// Text of the flyout entry, including its shortcut.
     [[nodiscard]] QString label_for(edit::Action action) const;
 
 Q_SIGNALS:
     void action_triggered(edit::Action action);
 
 private:
-    void add_section(const QString& title);
-    void add_button(edit::Action action, const QString& text, const QString& description,
-                    bool checkable);
+    /// One slot: the tools that share it, in flyout order.
+    void add_slot(const std::vector<edit::Action>& tools);
+    void show_in_slot(QToolButton* button, edit::Action tool);
 
     const edit::CommandMap& map_;
-    QHash<int, QAbstractButton*> buttons_;
+    QHash<int, QToolButton*> slot_of_tool_;
+    QHash<int, QAction*> entry_of_tool_;
     QVBoxLayout* layout_ = nullptr;
 };
 
