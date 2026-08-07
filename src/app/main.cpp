@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <string>
 
+#include "rf/app/demo_timeline.hpp"
 #include "rf/app/main_window.hpp"
 #include "rf/app/program_monitor.hpp"
 
@@ -25,6 +26,15 @@ int main(int argc, char** argv) {
                                   QStringLiteral("Play <file> in the Program monitor and exit."),
                                   QStringLiteral("file"));
     parser.addOption(play);
+
+    // The Timeline panel's painting has no automated oracle, and neither does
+    // the feel of a keyboard trim. Both need a person, and a person needs
+    // something on screen -- there is no project loading yet, so an empty window
+    // shows nothing to press keys against.
+    const QCommandLineOption demo(
+        QStringLiteral("demo-timeline"),
+        QStringLiteral("Start with a timeline to try the keyboard against."));
+    parser.addOption(demo);
     parser.process(app);
 
     if (parser.isSet(play)) {
@@ -49,6 +59,18 @@ int main(int argc, char** argv) {
     }
 
     rf::app::MainWindow window;
+
+    if (parser.isSet(demo)) {
+        if (auto built = rf::app::build_demo_timeline(window.document()); !built) {
+            std::fprintf(stderr, "%s\n", built.error().to_string().c_str());
+            return 1;
+        }
+        // Select something, or the first trim key has nothing to act on and the
+        // demo's first impression is an error message.
+        window.edit_state().track = window.document().tracks().front().id;
+        window.edit_state().clip = window.document().tracks().front().clips.front().id;
+    }
+
     window.show();
     return QApplication::exec();
 }

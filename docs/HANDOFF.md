@@ -41,7 +41,24 @@ outage — so that code has only ever been compiled by MSVC, with no Linux, Clan
 ASan, UBSan or TSan coverage. And nobody has looked at the Timeline panel; its
 painting has no oracle (D23), exactly as presentation has none (ADR 008).
 
-### Seeing it run
+### Seeing the editor run
+
+```powershell
+.\build\windows-release\bin\reelforge.exe --demo-timeline
+```
+
+Four two-second clips on V1, each linked to its sound on A1, every clip with two
+seconds of handle at both ends. The Timeline docks at the bottom and holds
+keyboard focus from launch. `B` picks the ripple tool, `]` arms the out point,
+`Ctrl+Right` trims a frame; `N` rolls, `Y` slips, `U` slides, `Ctrl+Z` undoes.
+`L`, `J` and `K` shuttle the playhead — and only the playhead, because nothing
+decodes at the shuttle rate yet (D25).
+
+The flag exists because the panel's painting has no automated oracle (D23) and
+neither does the feel of a keyboard trim. Both need a person. There is no project
+loading yet, which is why an empty window shows nothing.
+
+### Seeing playback run
 
 ```powershell
 .\build\windows-release\bin\reelforge.exe --play "A:\rf-large-media\reels_1080x1920_30fps_60s.mp4"

@@ -26,7 +26,8 @@ in that test calls the editor, the command map or `make_trim` directly.
 2. **Nobody has looked at it.** The panel's painting has no oracle (D23) — the
    tests prove it does not crash and that it draws from the document, not that a
    person sees a usable timeline. M3's gate required the project owner to watch
-   it run; the same applies here and has not happened.
+   it run; the same applies here and has not happened. `reelforge --demo-timeline`
+   exists so it can.
 
 **JKL now exists** (D21 resolved, iteration 6) and moves the playback clock and
 the drawn playhead. It does **not** move a picture (D25) — see below.
@@ -309,11 +310,40 @@ as frame −6855364. Only differences are meaningful. Exactness lives in the
 Transport tests, which own their `now` entirely; the window test only has to
 prove the wiring carries.
 
+### Iteration 7 — something to look at
+
+`reelforge --demo-timeline` starts with four two-second clips on V1, each linked
+to its sound on A1, every clip carrying two seconds of handle at both ends. It
+exists because the two things still blocking M4 are a CI run and a person's eyes,
+and the second was impossible: there is no project loading, so an empty window
+had nothing to press keys against.
+
+It is a fixture for a human, not a stand-in for loading a project — behind an
+explicit flag, built through the ordinary document API, and refusing rather than
+appending if the document already holds anything. The tests assert the properties
+that make it usable rather than its exact contents: every clip butt-joined (roll
+needs a neighbour, slide needs two), handles at both ends, picture linked to
+sound, and **every trim in the set succeeding on the first press** — someone
+trying the keyboard should not meet a refusal before they have seen anything
+work. It is built from `document.ticks_per_frame()` rather than an assumed 3000,
+so it is still frame-aligned at 29.97.
+
+```
+100% tests passed, 0 tests failed out of 460     (windows-debug)
+100% tests passed, 0 tests failed out of 460     (windows-release)
+
+reelforge.exe --demo-timeline  -> still running after 4s (started cleanly)
+```
+
+The smoke run matters because no test launches the actual binary with the flag —
+the suite builds the document directly, and a broken `main` would not have shown
+up in it.
+
 ### Next action
 
 Two things before M4 can be called done, and neither is code I can write: CI
-needs to run against iterations 4 to 6, and the project owner needs to launch
-`reelforge` and confirm the Timeline looks and behaves like one.
+needs to run against iterations 4 to 7, and the project owner needs to run
+`reelforge --demo-timeline` and confirm the Timeline looks and behaves like one.
 
 ## M3 — GPU compositor + Program monitor playback
 
