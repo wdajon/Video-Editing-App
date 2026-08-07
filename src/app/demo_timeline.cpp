@@ -39,9 +39,18 @@ Result<void> build_demo_timeline(timeline::Document& document) {
     const Ticks handle = 60 * frame;
     const Ticks source_length = handle + length + handle;
 
+    // A gap before the last pair only.
+    //
+    // The two halves of the trim set want opposite things: roll and slide need a
+    // butt-joined neighbour, and nudge needs free space. No single clip can
+    // offer both. So the first three are butt-joined -- that is where ripple,
+    // roll, slip and slide all work, and it is the clip the demo selects -- and
+    // the last one sits past a gap, which is where a nudge has somewhere to go.
+    const Ticks gap = 30 * frame;
+
     for (int i = 0; i < kClips; ++i) {
         const std::string name = "demo_" + std::to_string(i + 1);
-        const Ticks start = static_cast<Ticks>(i) * length;
+        const Ticks start = static_cast<Ticks>(i) * length + (i >= kClips - 1 ? gap : 0);
 
         Result<ClipId> picture = document.add_clip(video.value(), name + ".mov", handle, start,
                                                    length, source_length);

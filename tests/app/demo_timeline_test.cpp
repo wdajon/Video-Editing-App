@@ -38,17 +38,45 @@ TEST(DemoTimeline, BuildsAPictureTrackAndASoundTrack) {
     EXPECT_EQ(document.clip_count(), 8u);
 }
 
-TEST(DemoTimeline, EveryClipIsButtJoinedToTheNext) {
-    // Roll needs a butt-joined neighbour and slide needs two, so a demo with
-    // gaps would refuse half the trim set on the first keypress.
+TEST(DemoTimeline, TheClipTheDemoSelectsHasANeighbourOnBothSides) {
+    // Roll needs a butt-joined clip after it and slide needs one either side, so
+    // the clip someone lands on has to have both or half the trim set is refused
+    // on the first keypress. That is clips[1], which `--demo-timeline` selects.
     const Document document = demo();
     for (const Track& track : document.tracks()) {
-        for (std::size_t i = 1; i < track.clips.size(); ++i) {
-            EXPECT_EQ(track.clips[i].start,
-                      track.clips[i - 1].start + track.clips[i - 1].duration)
-                << "gap before clip " << i << " on " << track.name;
-        }
+        ASSERT_GE(track.clips.size(), 3u);
+        const Clip& before = track.clips[0];
+        const Clip& subject = track.clips[1];
+        const Clip& after = track.clips[2];
+        EXPECT_EQ(subject.start, before.start + before.duration) << track.name;
+        EXPECT_EQ(after.start, subject.start + subject.duration) << track.name;
     }
+}
+
+TEST(DemoTimeline, HasSomewhereToNudgeInto) {
+    // The other half of the set wants the opposite: a nudge needs free space,
+    // which a fully butt-joined timeline never has. No single clip can offer
+    // both, so the last one sits past a gap.
+    const Document document = demo();
+    for (const Track& track : document.tracks()) {
+        bool found_gap = false;
+        for (std::size_t i = 1; i < track.clips.size(); ++i) {
+            found_gap = found_gap || track.clips[i].start >
+                                         track.clips[i - 1].start + track.clips[i - 1].duration;
+        }
+        EXPECT_TRUE(found_gap) << track.name << " is packed solid; a nudge would be refused";
+    }
+}
+
+TEST(DemoTimeline, ANudgeSucceedsOnTheClipBesideTheGap) {
+    Document document = demo();
+    CommandStack stack;
+    EditState state;
+    state.track = document.tracks().front().id;
+    state.clip = document.tracks().front().clips.back().id;
+    Editor editor{document, stack, state};
+    EXPECT_TRUE(editor.perform(Action::nudge_backward).has_value())
+        << "the last clip has a gap in front of it to move into";
 }
 
 TEST(DemoTimeline, EveryClipHasHandlesAtBothEnds) {

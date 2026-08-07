@@ -495,10 +495,41 @@ nothing in a test suite can see that a panel has covered the application. The
 first render caught the dead band before it shipped. It works on the offscreen
 platform, so it needs no display.
 
+### Iteration 11 — a demo the trim set can actually be tried on
+
+*"Not sure if ripple, roll, slip or slide really do anything."* Three reasons,
+two of them mine.
+
+**Slip is invisible, and correctly so.** It moves neither the clip nor its
+length — only which frames of the source it shows. With no picture on screen
+(D25) there was nothing at all to perceive. The status bar now reads
+`demo_2.mov at 60 src 60-120`, so slip changes a number even when it changes no
+rectangle. That is a workaround for a missing Program monitor, not a substitute.
+
+**The demo could not run half the set.** Every clip was butt-joined, so a nudge
+had nowhere to go and was refused; and it selected the *first* clip, which starts
+at zero with nothing to its left, so slide-left and nudge-left were refused too.
+The first thing anyone tried failed.
+
+Those two wants are opposites — roll and slide need a butt-joined neighbour,
+nudge needs free space, and no clip offers both. So the demo now butt-joins the
+first three (ripple, roll, slip and slide all work there, and it is the clip the
+demo selects) and puts the last one past a gap (where a nudge has somewhere to
+go). Two tests assert exactly that, replacing one that asserted everything was
+butt-joined — which had been guarding half the requirement.
+
+```
+100% tests passed, 0 tests failed out of 496     (windows-debug)
+100% tests passed, 0 tests failed out of 496     (windows-release)
+```
+
 ### Next action
 
-Still not code I can write: CI against iterations 4–10, and the owner running
+Still not code I can write: CI against iterations 4–11, and the owner running
 `reelforge --demo-timeline` to say whether the strip and the mouse feel right.
+After that the single most valuable thing is D25 — connecting the Program monitor
+so there is a picture, which is what makes slip meaningful and what the whole
+editor is missing.
 
 ## M3 — GPU compositor + Program monitor playback
 

@@ -8,6 +8,7 @@
 #include "rf/app/demo_timeline.hpp"
 #include "rf/app/main_window.hpp"
 #include "rf/app/program_monitor.hpp"
+#include "rf/timeline/document.hpp"
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
@@ -77,9 +78,13 @@ int main(int argc, char** argv) {
             return 1;
         }
         // Select something, or the first trim key has nothing to act on and the
-        // demo's first impression is an error message.
-        window.edit_state().track = window.document().tracks().front().id;
-        window.edit_state().clip = window.document().tracks().front().clips.front().id;
+        // demo's first impression is an error message. The *second* clip, so it
+        // has a neighbour on both sides -- roll and slide need one, and the
+        // first clip starts at zero with nothing to its left, so half the trim
+        // set would be correctly refused on a clip anyone would try first.
+        const rf::timeline::Track& video = window.document().tracks().front();
+        window.edit_state().track = video.id;
+        window.edit_state().clip = video.clips[video.clips.size() > 1 ? 1 : 0].id;
     }
 
     window.show();
