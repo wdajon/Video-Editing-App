@@ -8,6 +8,8 @@
 
 #include "rf/app/demo_timeline.hpp"
 #include "rf/app/main_window.hpp"
+#include "rf/app/timeline_panel.hpp"
+#include "rf/edit/action.hpp"
 #include "rf/app/program_monitor.hpp"
 #include "rf/gpu/device.hpp"
 #include "rf/gpu/instance.hpp"
@@ -91,13 +93,10 @@ int main(int argc, char** argv) {
     rf::app::MainWindow window;
 
     if (parser.isSet(demo)) {
-        // Point the demo at the fixture the repository ships when a picture is
-        // wanted, and at a name with no file behind it otherwise. Nothing in the
-        // editor decodes, so the editor demo does not need real media -- but
-        // --render-frame does, and a demo that could not render would be a poor
-        // way to show that rendering works.
-        const std::string source =
-            parser.isSet(render_frame) ? rf::app::demo_media_relative_path() : std::string{};
+        // Always the real fixture now: the Program panel shows the picture at
+        // the playhead, so a demo pointing at names with no files behind them
+        // would open with an error where the picture should be.
+        const std::string source = rf::app::demo_media_relative_path();
         if (auto built = rf::app::build_demo_timeline(window.document(), source); !built) {
             std::fprintf(stderr, "%s\n", built.error().to_string().c_str());
             return 1;
@@ -110,6 +109,9 @@ int main(int argc, char** argv) {
         const rf::timeline::Track& video = window.document().tracks().front();
         window.edit_state().track = video.id;
         window.edit_state().clip = video.clips[video.clips.size() > 1 ? 1 : 0].id;
+        // Put the playhead on the selected clip, so the Program panel opens with
+        // a picture rather than with "nothing under the playhead".
+        window.timeline_panel()->perform(rf::edit::Action::step_forward);
     }
 
     if (parser.isSet(render_frame)) {
