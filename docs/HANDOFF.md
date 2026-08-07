@@ -8,6 +8,50 @@ Repository: https://github.com/wdajon/Video-Editing-App (public)
 
 ---
 
+## READ THIS FIRST: most of M4 is not on `main`
+
+`main` is at **M4 iteration 3**. Eight further commits live on branches, none
+merged, because **GitHub Actions has been in a major outage since 2026-08-06
+15:22 UTC** and nothing has been verified on anything but MSVC.
+
+| Branch | Contains | State |
+|---|---|---|
+| `main` | through M4 i3 (linked clips) | last CI-verified point |
+| `m4-command-map` | i4 — the command map | **PR #4 open**, CI never ran |
+| `m4-qt-panels` | i5–i11 — panels, workspaces, JKL, mouse, Adobe bindings, Tools strip | stacked on `m4-command-map`, **no PR** |
+
+```powershell
+git checkout m4-qt-panels   # everything described below lives here
+```
+
+**Do not merge either branch until CI is green on it.** Iterations 4–11 have
+never been compiled by GCC or Clang and have never run under ASan, UBSan or
+TSan; every earlier milestone leaned on those jobs. Check with:
+
+```powershell
+gh run list --limit 3
+```
+
+If runs are appearing again, push `m4-qt-panels`, open a PR into `main` (CI fires
+only on `main` pushes and PRs targeting `main`), and merge `m4-command-map` first
+so the stack lands in order.
+
+### What to do first
+
+1. **Check whether CI has recovered** and, if so, get iterations 4–11 through it.
+   Nothing should merge before that.
+2. **Ask the project owner to run `--demo-timeline`** and say whether the panel
+   behaves. M4 cannot be called done without it, the same way M3 could not.
+3. **Then D25 — connect the Program monitor.** There is no picture anywhere in
+   the application. Decode and compositing both work and are measured; nothing
+   routes them into the window. It is what makes slip meaningful, what gives JKL
+   something to play, and the largest single gap in the editor.
+
+Do **not** start M5 until M4's two blockers above are cleared. The milestone
+ladder is not advisory (see `docs/MISSION.md`).
+
+---
+
 ## Where the work stands
 
 | Milestone | State |
@@ -16,7 +60,7 @@ Repository: https://github.com/wdajon/Video-Editing-App (public)
 | M1 — probe, decode, frame-accurate seek | **Gate met.** 200/200 random seeks correct on a 10-min 4K file. Performance budget **not** met — see D9. |
 | M2 — timeline model + undo/redo | **Gate met.** 10,000-operation fuzz, undo returns byte-identical. |
 | M3 — GPU compositor + playback | **Gate met** 2026-08-05. 1800 frames presented, 0 dropped, p99 36.67 ms, confirmed visually by the project owner. See the caveats in `PROGRESS.md`. |
-| M4 — panels, docking, workspaces, JKL | **Iteration 6. Gate met mechanically on Windows** — the full trim set driven by `QTest::keyClick` on a real docked panel, plus JKL (ADR 009–014). **Not confirmed by CI** (Actions outage) and **not seen by anyone**. JKL moves a playhead, not a picture (D25). |
+| M4 — panels, docking, workspaces, JKL | **Iteration 11, on `m4-qt-panels`. Gate met mechanically on Windows** — the full trim set driven by `QTest::keyClick` on a real panel, plus JKL, a Tools strip and mouse editing (ADR 009–017). **Not confirmed by CI** and **not signed off by the owner**. JKL moves a playhead, not a picture (D25). |
 | M5 onward | Not started. |
 
 Zero warnings at `/W4 /WX` and `-Wall -Wextra -Werror`.
@@ -31,20 +75,20 @@ fact. Get the number from the suite:
 ctest --preset windows-debug
 ```
 
-At M4 iteration 10 (2026-08-06) that was **494**: core 48, media 92, timeline 130,
-edit 63, gpu 42, playback 40, app 79. Treat it as a dated snapshot, not a claim
-about now.
+At M4 iteration 11 (2026-08-06, on `m4-qt-panels`) that was **496**: core 48,
+media 92, timeline 130, edit 63, gpu 42, playback 40, app 81. Treat it as a dated
+snapshot, not a claim about now.
 
 **Adobe's shortcut page is readable — through the browser tool, not `WebFetch`,
 which times out on it.** Two sessions' worth of "the page could not be fetched"
 was a tooling mistake, not a property of the source. ADR 016 has the transcribed
 table; go back to the page for anything it does not cover.
 
-**Two things are outstanding and a fresh session must not read past them.** CI
-has never run against M4 iterations 4, 5 or 6 — GitHub Actions was in a major
-outage — so that code has only ever been compiled by MSVC, with no Linux, Clang,
-ASan, UBSan or TSan coverage. And nobody has looked at the Timeline panel; its
-painting has no oracle (D23), exactly as presentation has none (ADR 008).
+**Two things block calling M4 done, and neither is code.** CI has never run
+against iterations 4–11 (see the top of this file). And the project owner has not
+signed off on the panel; its painting has no oracle (D23), exactly as
+presentation has none (ADR 008), so a person has to look at it — M3's gate needed
+the same.
 
 ### Seeing the editor run
 
@@ -52,19 +96,22 @@ painting has no oracle (D23), exactly as presentation has none (ADR 008).
 .\build\windows-release\bin\reelforge.exe --demo-timeline
 ```
 
-Four two-second clips on V1, each linked to its sound on A1, every clip with two
-seconds of handle at both ends. The Timeline docks at the bottom and holds
-keyboard focus from launch; the **Tools panel docks on the left and lists every
-command with its shortcut on the button**, so nothing has to be memorised — click
-or press, they run the same code. The status bar shows the live tool, the
-selected clip and the armed edge, which is how you tell a keystroke registered
-when it changes no clip.
+Four two-second clips on V1, each linked to its sound on A1, with two seconds of
+handle at both ends. The **first three are butt-joined** — that is where ripple,
+roll, slip and slide work, and clip 2 is selected at launch — and the **fourth
+sits past a gap**, which is where a nudge has somewhere to go. Those two wants
+are opposites, so no single clip can serve both.
+
+The Timeline is the **central widget**; the **Tools strip docks on the left** with
+five tools in three slots (click to use, **click and hold** for the flyout).
+Every other command is in the Clip, Sequence, Playback and Edit menus with its
+shortcut beside it. The status bar shows the live tool, the selected clip, its
+position and **its source range** — the last of those is what makes slip
+observable at all, since slip moves neither the clip nor its length and there is
+no picture on screen (D25).
 
 **Mouse:** click a clip to select it, drag it to move it, drag the ruler strip at
-the top to move the playhead. The Tools strip on the left holds five tools in
-three slots — click to use, **click and hold** for the flyout. Every other
-command is in the Clip, Sequence, Playback and Edit menus with its shortcut
-beside it.
+the top to move the playhead.
 
 To see the layout without a display:
 
