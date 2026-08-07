@@ -216,10 +216,18 @@ TEST(MainWindowWorkspaces, DoesNotShipEmptyPanelsStandingInForRealOnes) {
     // M0's rule, still enforced: a panel that docks and shows nothing is
     // indistinguishable from a broken panel. Project, Source and Effect Controls
     // are absent rather than empty (ADR 013).
+    //
+    // Stated as "every dock has content" rather than "there is exactly one
+    // dock": counting docks made this fail the moment a second real panel
+    // arrived, which is the opposite of what it is guarding.
     MainWindow window;
     const auto docks = window.findChildren<QDockWidget*>();
-    ASSERT_EQ(docks.size(), 1) << "exactly one panel exists, and it has content";
-    EXPECT_NE(docks.front()->widget(), nullptr);
+    ASSERT_FALSE(docks.isEmpty());
+    for (const QDockWidget* dock : docks) {
+        EXPECT_NE(dock->widget(), nullptr)
+            << dock->objectName().toStdString() << " docks but shows nothing";
+        EXPECT_FALSE(dock->objectName().isEmpty()) << "Qt keys saved layouts on objectName";
+    }
 }
 
 TEST(MainWindowWorkspaces, SavesAndRestoresALayoutByName) {
