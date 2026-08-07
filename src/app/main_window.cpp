@@ -2,16 +2,17 @@
 
 #include <QApplication>
 #include <QDockWidget>
+#include <QLabel>
 #include <QMenuBar>
 #include <QStatusBar>
 #include <QTimer>
 
 #include <memory>
-
 #include <string>
 #include <utility>
 
 #include "rf/app/timeline_panel.hpp"
+#include "rf/app/tool_palette.hpp"
 #include "rf/app/window_title.hpp"
 #include "rf/core/assert.hpp"
 #include "rf/core/version.hpp"
@@ -87,6 +88,31 @@ MainWindow::MainWindow(QWidget* parent)
         modified_ = true;
         refresh_title();
     });
+    // Premiere puts its tools in a palette you can click, and hovering one tells
+    // you its key. That is how a keyboard-first application stays learnable --
+    // the mouse is how you find out what the keys are.
+    auto* tools_dock = new QDockWidget(tr("Tools"), this);
+    tools_dock->setObjectName("rf_dock_tools");
+    tool_palette_ = new ToolPalette(command_map_, this);
+    tools_dock->setWidget(tool_palette_);
+    addDockWidget(Qt::LeftDockWidgetArea, tools_dock);
+
+    // A button performs the action; it does not reimplement it. Both routes end
+    // in the same call, so a button and its shortcut cannot come to mean
+    // different things.
+    connect(tool_palette_, &ToolPalette::action_triggered, timeline_panel_,
+            &TimelinePanel::perform);
+
+    connect(timeline_panel_, &TimelinePanel::edit_state_changed, this, [this] {
+        tool_palette_->set_active_tool(edit_state_.tool);
+        tool_palette_->set_active_edge(edit_state_.edge);
+        refresh_state_label();
+        // Clicking a button moves focus to it, and the next keystroke would go
+        // to the button rather than the timeline. Handing focus back is what
+        // lets someone use the palette to learn a key and then just press it.
+        timeline_panel_->setFocus();
+    });
+
     connect(timeline_panel_, &TimelinePanel::shuttle_changed, this, [this] {
         const playback::Nanoseconds now = wall_clock_.now();
         if (Result<void> applied = transport_->apply(edit_state_.shuttle, now); !applied) {
@@ -112,11 +138,41 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
+    // Permanently on the right of the status bar, beside the transient
+    // messages: what the next trim key will do. Without it a user pressing B has
+    // no evidence anything happened at all.
+    state_label_ = new QLabel(this);
+    state_label_->setObjectName("rf_label_edit_state");
+    statusBar()->addPermanentWidget(state_label_);
+    refresh_state_label();
+
     // The keyboard workflow starts here: without focus the panel never sees a
     // key press, and every trim in M4's gate is a key press.
     timeline_panel_->setFocus();
 
     refresh_title();
+}
+
+void MainWindow::refresh_state_label() {
+    const QString tool = QString::fromStdString(std::string(edit::to_string(edit_state_.tool)));
+
+    QString clip = tr("nothing selected");
+    if (const timeline::Clip* selected = document_.find_clip(edit_state_.clip);
+        selected != nullptr) {
+        clip = QString::fromStdString(selected->source);
+    }
+
+    // The edge only means something for the two tools that move one. Showing it
+    // for slip would suggest a choice that has no effect.
+    const bool edge_matters =
+        edit_state_.tool == edit::Tool::ripple || edit_state_.tool == edit::Tool::roll;
+    const QString edge =
+        edge_matters
+            ? tr(" · %1 point")
+                  .arg(edit_state_.edge == edit::Edge::in ? tr("in") : tr("out"))
+            : QString{};
+
+    state_label_->setText(tr("%1 · %2%3").arg(tool, clip, edge));
 }
 
 void MainWindow::refresh_playhead(playback::Nanoseconds now) {
@@ -148,6 +204,10 @@ Result<void> MainWindow::restore_workspace(const QString& name) {
                      "workspace '" + name.toStdString() + "' was not accepted by Qt"};
     }
     return ok();
+}
+
+QString MainWindow::edit_state_text() const {
+    return state_label_ == nullptr ? QString{} : state_label_->text();
 }
 
 QStringList MainWindow::workspace_names() const {

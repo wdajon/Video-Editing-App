@@ -18,9 +18,12 @@
 #include "rf/timeline/command.hpp"
 #include "rf/timeline/document.hpp"
 
+class QLabel;
+
 namespace rf::app {
 
 class TimelinePanel;
+class ToolPalette;
 
 /// The application shell.
 ///
@@ -46,6 +49,12 @@ public:
     [[nodiscard]] timeline::Document& document() noexcept { return document_; }
     [[nodiscard]] edit::EditState& edit_state() noexcept { return edit_state_; }
     [[nodiscard]] TimelinePanel* timeline_panel() const noexcept { return timeline_panel_; }
+    [[nodiscard]] ToolPalette* tool_palette() const noexcept { return tool_palette_; }
+
+    /// What the status bar says the next trim key will do. Exposed because "the
+    /// user could not tell whether a key had worked" is the defect this answers,
+    /// so it is worth asserting rather than eyeballing.
+    [[nodiscard]] QString edit_state_text() const;
     [[nodiscard]] Transport& transport() noexcept { return *transport_; }
 
     /// Reads the transport and moves the drawn playhead. Called on a timer while
@@ -76,12 +85,15 @@ public:
 
 private:
     void refresh_title();
+    void refresh_state_label();
 
     timeline::Document document_;
     timeline::CommandStack stack_;
     edit::EditState edit_state_;
     edit::CommandMap command_map_;
     TimelinePanel* timeline_panel_ = nullptr;
+    ToolPalette* tool_palette_ = nullptr;
+    QLabel* state_label_ = nullptr;
     /// By pointer because Transport has no default constructor -- it is built
     /// through a Result, since a frame rate can be refused.
     std::unique_ptr<Transport> transport_;

@@ -5,6 +5,7 @@
 #include <QPaintEvent>
 
 #include <algorithm>
+#include <optional>
 
 #include "rf/app/key_translation.hpp"
 
@@ -47,32 +48,40 @@ void TimelinePanel::keyPressEvent(QKeyEvent* event) {
         return;
     }
 
-    edit::Editor editor{document_, stack_, state_};
-    const Result<void> performed = editor.press(map_, chord.value());
-    if (!performed) {
-        // An unbound chord is not a failure worth reporting -- most keys are
-        // unbound. Anything else is something the user asked for and did not
-        // get, so it has to be said out loud.
-        if (performed.error().code() == Errc::not_found &&
-            !map_.lookup(chord.value()).has_value()) {
-            QWidget::keyPressEvent(event);
-            return;
-        }
-        last_message_ = QString::fromStdString(performed.error().message());
-        Q_EMIT status_message(last_message_);
-        event->accept();
-        update();
+    const std::optional<edit::Action> action = map_.lookup(chord.value());
+    if (!action) {
+        // Most keys are bound to nothing. Letting them travel up keeps a menu
+        // shortcut on the same key working.
+        QWidget::keyPressEvent(event);
         return;
     }
 
-    last_message_.clear();
-    Q_EMIT status_message(QString{});
-    Q_EMIT document_changed();
-    // The window owns the clock, so a shuttle key is reported rather than
-    // applied here. Emitted unconditionally on success: working out whether a
-    // key was a shuttle key would duplicate the command map's job.
-    Q_EMIT shuttle_changed();
+    perform(*action);
     event->accept();
+}
+
+void TimelinePanel::perform(edit::Action action) {
+    edit::Editor editor{document_, stack_, state_};
+    const Result<void> performed = editor.perform(action);
+
+    if (!performed) {
+        last_message_ = QString::fromStdString(performed.error().message());
+    } else {
+        last_message_.clear();
+    }
+    Q_EMIT status_message(last_message_);
+
+    if (performed) {
+        Q_EMIT document_changed();
+        // The window owns the clock, so a shuttle action is reported rather
+        // than applied here. Emitted unconditionally on success: working out
+        // whether an action was a shuttle action would duplicate the map's job.
+        Q_EMIT shuttle_changed();
+    }
+    // Emitted either way. A refused trim still leaves the tool and edge worth
+    // showing, and the whole reason this signal exists is that a user could not
+    // tell whether a key had done anything.
+    Q_EMIT edit_state_changed();
     update();
 }
 

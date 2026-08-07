@@ -41,6 +41,9 @@ creep gets refused without losing the idea.
 | D23 | M4 i5 | The Timeline panel's painting has no automated oracle. Tests prove it does not crash and that it draws from the document, not that a person sees a usable timeline — the same limit ADR 008 records for presentation. Clip rectangles, the selection highlight and the armed-edge marker have never been looked at by anyone. Fix: a golden-image comparison of `QWidget::grab()`, which needs a stable font and palette across platforms first. | — |
 | D24 | M4 i5 | The Timeline panel shows a fixed 20-second window with no zoom, scroll or playhead. Deliberate: this milestone is the keyboard, and a zoom control nothing can drive would be decoration. A real editor needs all three. | M6 (keyframes need a time ruler) |
 
+| D26 | M4 i8 | **`[` and `]` for arming an edit point are ReelForge's invention.** Premiere ships *Select Nearest Edit Point as Ripple In/Out* unassigned, so a keyboard-only user cannot choose an edge out of the box — but that does not make these the right keys. The project owner asked that Adobe's default-shortcuts page be the source; it could not be fetched (two timeouts, very large page), so nothing was changed on a guess. They are now labelled buttons in the Tools panel, so at least they are discoverable. Fix: read the page and either adopt Premiere's assignment or record that there is none. | — |
+| D27 | M4 i8 | The Tools panel is text buttons, not Premiere's icon strip. Icons would need artwork and a tooltip convention; text plus a visible shortcut answers the "which key is this?" question that prompted the panel, and does it without inventing an icon language. | — |
+
 ## Deferred work
 
 - **vcpkg binary caching in CI** (ADR 001). Clean builds will get slow once

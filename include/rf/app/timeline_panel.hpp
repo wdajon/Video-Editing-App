@@ -36,6 +36,14 @@ public:
     void set_playhead_frame(std::int64_t frame);
     [[nodiscard]] std::int64_t playhead_frame() const noexcept { return playhead_frame_; }
 
+    /// Performs `action` exactly as a key press would.
+    ///
+    /// The single path a key and a palette button both take. Two entry points
+    /// that each interpreted an action would be two things to keep in step, and
+    /// the first divergence would be a button that quietly did something its
+    /// shortcut did not.
+    void perform(edit::Action action);
+
     /// The message from the last refused action, or empty. A keyboard-only user
     /// pressing a trim key at the media limit has to be told why nothing moved,
     /// and a modal dialog on every refused keystroke would be unusable.
@@ -49,6 +57,11 @@ Q_SIGNALS:
     /// Emitted when a key moved the shuttle, so the window can apply the new
     /// rate to the transport. The panel does not own the clock.
     void shuttle_changed();
+
+    /// Emitted after every action, so the palette can show which tool and edge
+    /// are live and the window can describe the state. This is what makes a key
+    /// press visibly do something even when it changes no clip.
+    void edit_state_changed();
 
     /// Emitted for a refused action, with the reason. Empty when an action
     /// succeeds, so a status bar clears itself rather than showing a stale

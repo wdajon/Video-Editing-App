@@ -31,8 +31,8 @@ fact. Get the number from the suite:
 ctest --preset windows-debug
 ```
 
-At M4 iteration 6 (2026-08-06) that was **453**: core 48, media 92, timeline 130,
-edit 54, gpu 42, playback 40, app 47. Treat it as a dated snapshot, not a claim
+At M4 iteration 8 (2026-08-06) that was **472**: core 48, media 92, timeline 130,
+edit 54, gpu 42, playback 40, app 66. Treat it as a dated snapshot, not a claim
 about now.
 
 **Two things are outstanding and a fresh session must not read past them.** CI
@@ -49,8 +49,12 @@ painting has no oracle (D23), exactly as presentation has none (ADR 008).
 
 Four two-second clips on V1, each linked to its sound on A1, every clip with two
 seconds of handle at both ends. The Timeline docks at the bottom and holds
-keyboard focus from launch. `B` picks the ripple tool, `]` arms the out point,
-`Ctrl+Right` trims a frame; `N` rolls, `Y` slips, `U` slides, `Ctrl+Z` undoes.
+keyboard focus from launch; the **Tools panel docks on the left and lists every
+command with its shortcut on the button**, so nothing has to be memorised — click
+or press, they run the same code. The status bar shows the live tool, the
+selected clip and the armed edge, which is how you tell a keystroke registered
+when it changes no clip.
+
 `L`, `J` and `K` shuttle the playhead — and only the playhead, because nothing
 decodes at the shuttle rate yet (D25).
 
