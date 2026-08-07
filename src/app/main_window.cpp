@@ -229,7 +229,18 @@ void MainWindow::refresh_state_label() {
     QString clip = tr("nothing selected");
     if (const timeline::Clip* selected = document_.find_clip(edit_state_.clip);
         selected != nullptr) {
-        clip = QString::fromStdString(selected->source);
+        // Where the clip sits, and which frames of its source it shows.
+        //
+        // The second half is what makes slip observable at all: slip moves
+        // neither the clip nor its length, only which part of the source is
+        // used, so with no picture on screen (D25) it would otherwise change
+        // nothing a user can perceive.
+        const timeline::Ticks per_frame = document_.ticks_per_frame();
+        clip = tr("%1  at %2  src %3-%4")
+                   .arg(QString::fromStdString(selected->source))
+                   .arg(selected->start / per_frame)
+                   .arg(selected->source_in / per_frame)
+                   .arg((selected->source_in + selected->duration) / per_frame);
     }
 
     // The edge only means something for the two tools that move one. Showing it
