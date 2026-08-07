@@ -125,6 +125,7 @@ if(RF_BUILD_APP)
 
     add_executable(rf_app_tests
         app/main.cpp
+        app/demo_timeline_test.cpp
         app/key_translation_test.cpp
         app/main_window_test.cpp
         app/timeline_panel_test.cpp
