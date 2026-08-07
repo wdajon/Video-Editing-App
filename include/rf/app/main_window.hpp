@@ -18,7 +18,9 @@
 #include "rf/timeline/command.hpp"
 #include "rf/timeline/document.hpp"
 
+class QAction;
 class QLabel;
+class QMenu;
 
 namespace rf::app {
 
@@ -55,6 +57,11 @@ public:
     /// user could not tell whether a key had worked" is the defect this answers,
     /// so it is worth asserting rather than eyeballing.
     [[nodiscard]] QString edit_state_text() const;
+
+    /// The menu entry for `action`, or null. Every command that is not a tool
+    /// lives in a menu rather than on the Tools strip -- the strip is a tool
+    /// chooser, and a wall of buttons there swallowed the window.
+    [[nodiscard]] QAction* menu_action_for(edit::Action action) const;
     [[nodiscard]] Transport& transport() noexcept { return *transport_; }
 
     /// Reads the transport and moves the drawn playhead. Called on a timer while
@@ -86,6 +93,9 @@ public:
 private:
     void refresh_title();
     void refresh_state_label();
+    /// Adds a menu entry that performs `action`, labelled with its shortcut read
+    /// from the command map.
+    void add_command(QMenu* menu, edit::Action action, const QString& text);
 
     timeline::Document document_;
     timeline::CommandStack stack_;
@@ -94,6 +104,7 @@ private:
     TimelinePanel* timeline_panel_ = nullptr;
     ToolPalette* tool_palette_ = nullptr;
     QLabel* state_label_ = nullptr;
+    QHash<int, QAction*> command_actions_;
     /// By pointer because Transport has no default constructor -- it is built
     /// through a Result, since a frame rate can be refused.
     std::unique_ptr<Transport> transport_;

@@ -31,8 +31,8 @@ fact. Get the number from the suite:
 ctest --preset windows-debug
 ```
 
-At M4 iteration 9 (2026-08-06) that was **488**: core 48, media 92, timeline 130,
-edit 63, gpu 42, playback 40, app 73. Treat it as a dated snapshot, not a claim
+At M4 iteration 10 (2026-08-06) that was **494**: core 48, media 92, timeline 130,
+edit 63, gpu 42, playback 40, app 79. Treat it as a dated snapshot, not a claim
 about now.
 
 **Adobe's shortcut page is readable — through the browser tool, not `WebFetch`,
@@ -61,7 +61,20 @@ selected clip and the armed edge, which is how you tell a keystroke registered
 when it changes no clip.
 
 **Mouse:** click a clip to select it, drag it to move it, drag the ruler strip at
-the top to move the playhead.
+the top to move the playhead. The Tools strip on the left holds five tools in
+three slots — click to use, **click and hold** for the flyout. Every other
+command is in the Clip, Sequence, Playback and Edit menus with its shortcut
+beside it.
+
+To see the layout without a display:
+
+```powershell
+$env:QT_QPA_PLATFORM='offscreen'
+.\build\windows-release\bin\reelforge.exe --demo-timeline --screenshot out.png
+```
+
+No test can see that a panel has covered the application; two such defects
+reached the project owner before this existed.
 
 **Keys, Adobe's own** (ADR 016, read from their page): `Ctrl+Alt+←/→` slips,
 `Alt+,`/`Alt+.` slides, `Alt+←/→` nudges, `←`/`→` step the playhead, `Space`

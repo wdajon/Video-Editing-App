@@ -204,11 +204,13 @@ TEST(TimelinePanelTest, PaintsWithoutATimelineAndWithOne) {
 
 // --- the window: docking and workspaces --------------------------------------
 
-TEST(MainWindowWorkspaces, ShipsATimelinePanelDockedAndFocused) {
+TEST(MainWindowWorkspaces, PutsTheTimelineInTheCentreAndTheToolsInADock) {
     MainWindow window;
     ASSERT_NE(window.timeline_panel(), nullptr);
     EXPECT_EQ(window.timeline_panel()->objectName(), "rf_panel_timeline");
-    EXPECT_NE(window.findChild<QDockWidget*>("rf_dock_timeline"), nullptr)
+    EXPECT_EQ(window.centralWidget(), window.timeline_panel())
+        << "a QMainWindow with no central widget leaves a dead band across the window";
+    EXPECT_NE(window.findChild<QDockWidget*>("rf_dock_tools"), nullptr)
         << "Qt keys saved layouts on objectName; an unnamed dock loses its place";
 }
 
@@ -236,7 +238,7 @@ TEST(MainWindowWorkspaces, SavesAndRestoresALayoutByName) {
     // inside a window that was never shown is neither visible nor explicitly
     // hidden, and asserting on it would prove nothing either way.
     window.show();
-    auto* dock = window.findChild<QDockWidget*>("rf_dock_timeline");
+    auto* dock = window.findChild<QDockWidget*>("rf_dock_tools");
     ASSERT_NE(dock, nullptr);
     ASSERT_TRUE(dock->isVisible());
 
@@ -266,7 +268,7 @@ TEST(MainWindowWorkspaces, ListsWorkspacesInAStableOrder) {
 TEST(MainWindowWorkspaces, SavingTwiceUnderOneNameReplacesTheLayout) {
     MainWindow window;
     window.show();
-    auto* dock = window.findChild<QDockWidget*>("rf_dock_timeline");
+    auto* dock = window.findChild<QDockWidget*>("rf_dock_tools");
     ASSERT_NE(dock, nullptr);
 
     window.save_workspace("editing");
