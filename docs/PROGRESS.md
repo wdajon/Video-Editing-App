@@ -523,13 +523,55 @@ butt-joined — which had been guarding half the requirement.
 100% tests passed, 0 tests failed out of 496     (windows-release)
 ```
 
+### Iteration 12 — the first picture out of a timeline
+
+**Increment:** the question nothing could answer — *given a playhead, what is
+visible, in what order, and which frame of each source?* `layers_at()` answers
+it as pure document logic; `rf_render` decodes, converts and composites the
+result. **Falsifiable check:** eleven tests on the arithmetic with no decoder and
+no GPU, eight on the whole path against real media, and a rendered PNG checked
+against the video's own burned-in frame counter.
+
+**The verification is the strongest in the project so far, and it came from
+outside ReelForge.** `testsrc2` burns its frame number into the picture. Demo
+clip 1 starts twenty frames into its source, so timeline frame 5 must show source
+frame 25 — the rendered image reads `25`. Frame 30 falls in clip 2 and reads
+`30`. That is an oracle the decoder did not compute and no assertion of mine
+could fake.
+
+```
+100% tests passed, 0 tests failed out of 515     (windows-debug)
+100% tests passed, 0 tests failed out of 515     (windows-release)
+
+render = 8 tests (new), timeline = 141 (was 130)
+```
+
+Four rules `layers_at()` settles, each of which is a way to get a picture subtly
+wrong: half-open coverage, so butt-joined clips show exactly one frame at the
+join; bottom-first order, taken from `Document::tracks()` so the two cannot
+disagree; **empty is an answer**, so a gap draws black rather than holding the
+last frame; and a disabled clip leaves a hole rather than revealing what is
+behind it — "skip and keep looking" is the natural way to write that loop and is
+wrong.
+
+`rf_render` links no Qt, because M5's export renders the same way into an encoder
+rather than onto a screen. Building it once is what stops an exported file and a
+previewed frame disagreeing about what the edit is. Decoders stay open between
+frames; a test asserts two clips of one file share one.
+
+**The demo timeline was resized to fit real media.** It described four
+six-second clips and the shipped fixture is two seconds, so pointed at real media
+it would have claimed frames the file never had — exactly what the renderer
+refuses to paper over. Clips are now twenty frames from a sixty-frame source.
+
 ### Next action
 
-Still not code I can write: CI against iterations 4–11, and the owner running
-`reelforge --demo-timeline` to say whether the strip and the mouse feel right.
-After that the single most valuable thing is D25 — connecting the Program monitor
-so there is a picture, which is what makes slip meaningful and what the whole
-editor is missing.
+**D25 is not closed** — this renders a frame on demand, it does not present at
+the shuttle rate, so pressing `L` still moves only the playhead. Embedding the
+`ProgramMonitor` and driving it from the transport is D30, and it is now a small
+step: the hard part was never presentation, it was knowing what to present.
+
+Still not code I can write: CI against iterations 4–12, and the owner's sign-off.
 
 ## M3 — GPU compositor + Program monitor playback
 

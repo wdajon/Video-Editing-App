@@ -87,6 +87,7 @@ gtest_discover_tests(rf_playback_tests
 add_executable(rf_timeline_tests
     timeline/command_fuzz_test.cpp
     timeline/command_test.cpp
+    timeline/composition_test.cpp
     timeline/document_test.cpp
     timeline/serialise_test.cpp
     timeline/trim_test.cpp
@@ -119,6 +120,28 @@ target_link_libraries(rf_edit_tests
 gtest_discover_tests(rf_edit_tests
     DISCOVERY_MODE PRE_TEST
     PROPERTIES LABELS "edit")
+
+add_executable(rf_render_tests
+    render/sequence_renderer_test.cpp)
+
+target_link_libraries(rf_render_tests
+    PRIVATE
+        rf::render
+        rf::warnings
+        GTest::gtest
+        GTest::gtest_main)
+
+target_compile_definitions(rf_render_tests
+    PRIVATE RF_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures")
+
+# Shares rf_gpu's Vulkan loader suppression: the loader leaks one fixed-size
+# allocation of process-global state that volk never unloads.
+gtest_discover_tests(rf_render_tests
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES
+        LABELS "render"
+        ENVIRONMENT
+            "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan-suppressions.txt:print_suppressions=1")
 
 if(RF_BUILD_APP)
     set(CMAKE_AUTOMOC ON)
