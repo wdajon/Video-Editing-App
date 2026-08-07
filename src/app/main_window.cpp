@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "rf/app/program_panel.hpp"
 #include "rf/app/timeline_panel.hpp"
 #include "rf/app/tool_palette.hpp"
 #include "rf/app/window_title.hpp"
@@ -99,11 +100,28 @@ MainWindow::MainWindow(QWidget* parent)
     tools_dock->setWidget(tool_palette_);
     addDockWidget(Qt::LeftDockWidgetArea, tools_dock);
 
+    // The picture at the playhead. It renders on demand rather than presenting
+    // continuously, so it follows a scrub and a step but does not play -- see
+    // the header for why that trade was made and what replaces it (D30).
+    auto* program_dock = new QDockWidget(tr("Program"), this);
+    program_dock->setObjectName("rf_dock_program");
+    program_panel_ = new ProgramPanel(document_, this);
+    program_dock->setWidget(program_panel_);
+    addDockWidget(Qt::RightDockWidgetArea, program_dock);
+
     // A button performs the action; it does not reimplement it. Both routes end
     // in the same call, so a button and its shortcut cannot come to mean
     // different things.
     connect(tool_palette_, &ToolPalette::action_triggered, timeline_panel_,
             &TimelinePanel::perform);
+
+    connect(timeline_panel_, &TimelinePanel::document_changed, this, [this] {
+        // An edit changes what is under the playhead even when the playhead has
+        // not moved -- a slip is exactly that, and it is the operation hardest
+        // to believe in without seeing it.
+        program_panel_->invalidate();
+        program_panel_->show_frame(timeline_panel_->playhead_frame());
+    });
 
     connect(timeline_panel_, &TimelinePanel::edit_state_changed, this, [this] {
         tool_palette_->set_active_tool(edit_state_.tool);
@@ -119,6 +137,7 @@ MainWindow::MainWindow(QWidget* parent)
         // fighting them on the next tick.
         transport_->seek(wall_clock_.now(), frame);
         timeline_panel_->set_playhead_frame(frame);
+        program_panel_->show_frame(frame);
     });
 
     connect(timeline_panel_, &TimelinePanel::shuttle_changed, this, [this] {
@@ -267,6 +286,7 @@ void MainWindow::refresh_playhead(playback::Nanoseconds now) {
         return;
     }
     timeline_panel_->set_playhead_frame(frame.value());
+    program_panel_->show_frame(frame.value());
 }
 
 void MainWindow::save_workspace(const QString& name) {

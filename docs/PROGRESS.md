@@ -564,14 +564,44 @@ six-second clips and the shipped fixture is two seconds, so pointed at real medi
 it would have claimed frames the file never had — exactly what the renderer
 refuses to paper over. Clips are now twenty frames from a sixty-frame source.
 
+### Iteration 13 — a picture in the window
+
+`ProgramPanel` docks on the right and shows the frame at the playhead. It follows
+a scrub, a step and an edit — the last of those matters most, because a **slip**
+changes what is under the playhead without moving anything, and it was the
+operation impossible to believe in without seeing it.
+
+```
+100% tests passed, 0 tests failed out of 515     (windows-debug)
+100% tests passed, 0 tests failed out of 515     (windows-release)
+```
+
+Confirmed by rendering the whole window offscreen: the Program dock shows decoded
+testsrc2, letterboxed, with its burned-in counter reading `21` — playhead frame 1
+on a clip starting twenty frames into its source.
+
+**A deliberate trade, stated rather than buried.** This is a plain `QWidget`
+painting what `rf_render` produces, not the Vulkan `QWindow` of ADR 008. It works
+with no surface, so it runs offscreen and on a CI runner and shows a picture on
+any machine with a device — and it reads pixels back per frame, which M3 measured
+at p50 49.9 ms for 1080x1920 with three layers (D13). Fine for scrubbing;
+**it will not sustain playback at a real sequence size.** The fast path already
+exists and already presents under FIFO. Getting a picture into the window first
+was worth more than getting the fast one there eventually.
+
+Three things it refuses to fake: it says *why* there is no picture rather than
+going black, it letterboxes rather than stretching (a monitor that changed the
+aspect ratio would misrepresent the one thing it exists to show), and it skips
+re-rendering a frame already showing, so a drag costs one decode rather than one
+per mouse move.
+
 ### Next action
 
-**D25 is not closed** — this renders a frame on demand, it does not present at
-the shuttle rate, so pressing `L` still moves only the playhead. Embedding the
-`ProgramMonitor` and driving it from the transport is D30, and it is now a small
-step: the hard part was never presentation, it was knowing what to present.
+There is a picture, and playback is still the gap: pressing `L` sweeps the
+playhead and the monitor cannot keep up at a real sequence size, because it reads
+back per frame. Routing it through the Vulkan path is the rest of D30.
 
-Still not code I can write: CI against iterations 4–12, and the owner's sign-off.
+Still not code I can write: CI against iterations 4–13, and the owner's sign-off.
 
 ## M3 — GPU compositor + Program monitor playback
 
