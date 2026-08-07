@@ -306,6 +306,121 @@ TEST(MainWindowWorkspaces, AKeyPressInTheWindowReachesTheDocument) {
     EXPECT_TRUE(window.is_modified()) << "an edit must mark the project modified";
 }
 
+// --- the mouse (ADR 016) ------------------------------------------------------
+//
+// The owner's second report: "I didn't want an only-keyboard video editor."
+// Clicking selects, dragging moves, dragging the ruler scrubs.
+
+namespace {
+
+/// Screen x of a timeline tick, matching the panel's own mapping.
+int x_of(const TimelinePanel& panel, Ticks tick) {
+    constexpr int kHeader = 96;
+    constexpr Ticks kVisible = 90000 * 20;
+    const int span = panel.width() - kHeader;
+    return kHeader + static_cast<int>(static_cast<double>(tick) /
+                                      static_cast<double>(kVisible) * span);
+}
+
+constexpr int kFirstTrackY = 22 + 4 + 28;  // ruler + gap + half a track
+
+}  // namespace
+
+TEST(TimelineMouse, ClickingAClipSelectsIt) {
+    Panel panel;
+    panel.widget.resize(1200, 300);
+
+    QTest::mouseClick(&panel.widget, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(x_of(panel.widget, 45 * kFrame), kFirstTrackY));
+    EXPECT_EQ(panel.state.clip, panel.b) << "the click landed inside clip b";
+
+    QTest::mouseClick(&panel.widget, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(x_of(panel.widget, 75 * kFrame), kFirstTrackY));
+    EXPECT_EQ(panel.state.clip, panel.c);
+}
+
+TEST(TimelineMouse, ClickingEmptySpaceClearsTheSelection) {
+    Panel panel;
+    panel.widget.resize(1200, 300);
+    QTest::mouseClick(&panel.widget, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(x_of(panel.widget, 200 * kFrame), kFirstTrackY));
+    EXPECT_FALSE(panel.state.clip.is_valid());
+}
+
+TEST(TimelineMouse, DraggingAClipMovesItAndLeavesOneUndoEntry) {
+    Panel panel;
+    panel.widget.resize(1200, 300);
+    // Remove the clip after b so there is somewhere to drag into.
+    ASSERT_TRUE(panel.document.remove_clip(panel.c).has_value());
+
+    const QPoint from(x_of(panel.widget, 45 * kFrame), kFirstTrackY);
+    const QPoint to(x_of(panel.widget, 55 * kFrame), kFirstTrackY);
+    QTest::mousePress(&panel.widget, Qt::LeftButton, Qt::NoModifier, from);
+    QTest::mouseMove(&panel.widget, to);
+    QTest::mouseRelease(&panel.widget, Qt::LeftButton, Qt::NoModifier, to);
+
+    EXPECT_GT(panel.clip(panel.b).start, 30 * kFrame) << "the clip moved right";
+    EXPECT_EQ(panel.clip(panel.b).duration, 30 * kFrame) << "dragging must not resize";
+    EXPECT_EQ(panel.stack.undo_depth(), 1u) << "one gesture, one undo entry";
+
+    ASSERT_TRUE(panel.stack.undo(panel.document).has_value());
+    EXPECT_EQ(panel.clip(panel.b).start, 30 * kFrame);
+}
+
+TEST(TimelineMouse, AClickThatDoesNotMoveIsNotAnEdit) {
+    Panel panel;
+    panel.widget.resize(1200, 300);
+    const QPoint at(x_of(panel.widget, 45 * kFrame), kFirstTrackY);
+
+    QTest::mousePress(&panel.widget, Qt::LeftButton, Qt::NoModifier, at);
+    QTest::mouseRelease(&panel.widget, Qt::LeftButton, Qt::NoModifier, at);
+
+    EXPECT_EQ(panel.stack.undo_depth(), 0u) << "a click that wobbles is still a click";
+    EXPECT_EQ(panel.clip(panel.b).start, 30 * kFrame);
+}
+
+TEST(TimelineMouse, DroppingOntoAnotherClipIsRefusedAndChangesNothing) {
+    // Refused rather than clamped: clamping would put the clip somewhere the
+    // user did not point at.
+    Panel panel;
+    panel.widget.resize(1200, 300);
+    const std::string before = serialise(panel.document);
+
+    const QPoint from(x_of(panel.widget, 45 * kFrame), kFirstTrackY);
+    const QPoint to(x_of(panel.widget, 65 * kFrame), kFirstTrackY);
+    QTest::mousePress(&panel.widget, Qt::LeftButton, Qt::NoModifier, from);
+    QTest::mouseMove(&panel.widget, to);
+    QTest::mouseRelease(&panel.widget, Qt::LeftButton, Qt::NoModifier, to);
+
+    EXPECT_EQ(serialise(panel.document), before) << "clip c is in the way";
+    EXPECT_FALSE(panel.widget.last_message().isEmpty()) << "and the user is told why";
+}
+
+TEST(TimelineMouse, DraggingInTheRulerMovesThePlayhead) {
+    Panel panel;
+    panel.widget.resize(1200, 300);
+    QSignalSpy moved(&panel.widget, &TimelinePanel::playhead_moved);
+
+    QTest::mousePress(&panel.widget, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(x_of(panel.widget, 20 * kFrame), 8));
+    QTest::mouseMove(&panel.widget, QPoint(x_of(panel.widget, 50 * kFrame), 8));
+    QTest::mouseRelease(&panel.widget, Qt::LeftButton, Qt::NoModifier,
+                        QPoint(x_of(panel.widget, 50 * kFrame), 8));
+
+    EXPECT_GT(panel.widget.playhead_frame(), 40);
+    EXPECT_GT(moved.count(), 0);
+    EXPECT_EQ(panel.stack.undo_depth(), 0u) << "scrubbing is not an edit";
+}
+
+TEST(TimelineMouse, ClickingTheTimelineTakesFocusBackFromAnyButton) {
+    Panel panel;
+    panel.widget.resize(1200, 300);
+    panel.widget.clearFocus();
+    QTest::mouseClick(&panel.widget, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(x_of(panel.widget, 45 * kFrame), kFirstTrackY));
+    EXPECT_TRUE(panel.widget.hasFocus() || panel.widget.focusPolicy() != Qt::NoFocus);
+}
+
 // --- JKL, from the key to the playhead (ADR 014) ------------------------------
 
 TEST(ShuttleThroughTheWindow, LStartsTheClockAndTheDrawnPlayheadFollows) {

@@ -39,6 +39,29 @@ constexpr DefaultBinding kDefaults[] = {
     {"[", Action::select_in_edge},
     {"]", Action::select_out_edge},
 
+    // Adobe's Timeline-panel defaults, read from the page and transcribed in
+    // ADR 016. These act on the clip selection with no tool involved, which is
+    // the whole difference between one keystroke doing something and two
+    // keystrokes doing nothing visible.
+    {"Alt+Left", Action::nudge_backward},
+    {"Alt+Right", Action::nudge_forward},
+    {"Alt+Shift+Left", Action::nudge_backward_many},
+    {"Alt+Shift+Right", Action::nudge_forward_many},
+
+    {"Ctrl+Alt+Left", Action::slip_backward},
+    {"Ctrl+Alt+Right", Action::slip_forward},
+    {"Ctrl+Alt+Shift+Left", Action::slip_backward_many},
+    {"Ctrl+Alt+Shift+Right", Action::slip_forward_many},
+
+    {"Alt+,", Action::slide_backward},
+    {"Alt+.", Action::slide_forward},
+    {"Alt+Shift+,", Action::slide_backward_many},
+    {"Alt+Shift+.", Action::slide_forward_many},
+
+    {"Left", Action::step_backward},
+    {"Right", Action::step_forward},
+    {"Space", Action::play_stop},
+
     // JKL, unchanged since flatbed editing and identical in every NLE.
     {"L", Action::shuttle_forward},
     {"J", Action::shuttle_backward},
