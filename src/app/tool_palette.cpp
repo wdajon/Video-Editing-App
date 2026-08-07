@@ -53,11 +53,26 @@ ToolPalette::ToolPalette(const edit::CommandMap& map, QWidget* parent)
     add_button(Action::select_out_edge, tr("Out point"),
                tr("Ripple and roll act on the end of the clip."), true);
 
-    add_section(tr("Trim"));
+    add_section(tr("Trim (ripple and roll)"));
     add_button(Action::trim_backward_many, tr("Back 5 frames"), {}, false);
     add_button(Action::trim_backward, tr("Back 1 frame"), {}, false);
     add_button(Action::trim_forward, tr("Forward 1 frame"), {}, false);
     add_button(Action::trim_forward_many, tr("Forward 5 frames"), {}, false);
+
+    // Adobe's Timeline commands act on the selection with no tool involved, so
+    // they get their own section rather than sitting under the tools they no
+    // longer need. One press, and something moves.
+    add_section(tr("Move selected clip"));
+    add_button(Action::nudge_backward, tr("Nudge left"), {}, false);
+    add_button(Action::nudge_forward, tr("Nudge right"), {}, false);
+    add_button(Action::slip_backward, tr("Slip left"),
+               tr("Change what the clip shows. It does not move."), false);
+    add_button(Action::slip_forward, tr("Slip right"),
+               tr("Change what the clip shows. It does not move."), false);
+    add_button(Action::slide_backward, tr("Slide left"),
+               tr("Move the clip; its neighbours absorb it."), false);
+    add_button(Action::slide_forward, tr("Slide right"),
+               tr("Move the clip; its neighbours absorb it."), false);
 
     add_section(tr("Select"));
     add_button(Action::select_previous_clip, tr("Previous clip"), {}, false);
@@ -66,6 +81,9 @@ ToolPalette::ToolPalette(const edit::CommandMap& map, QWidget* parent)
     add_button(Action::select_next_track, tr("Track below"), {}, false);
 
     add_section(tr("Transport"));
+    add_button(Action::step_backward, tr("Step back"), {}, false);
+    add_button(Action::step_forward, tr("Step forward"), {}, false);
+    add_button(Action::play_stop, tr("Play / Stop"), {}, false);
     add_button(Action::shuttle_backward, tr("Shuttle back"),
                tr("Press again to go faster."), false);
     add_button(Action::shuttle_stop, tr("Stop"), {}, false);
@@ -101,7 +119,11 @@ void ToolPalette::add_button(Action action, const QString& text, const QString& 
     button->setObjectName(QStringLiteral("rf_tool_%1").arg(
         QString::fromStdString(std::string(edit::to_string(action)))));
     button->setCheckable(checkable);
-    button->setAutoRaise(true);
+    // Auto-raise draws the button flat, and a flat checked button is nearly
+    // indistinguishable from an unchecked one in the default style -- so
+    // selecting a tool looked like nothing had happened even though it had.
+    // That was the whole complaint. See ADR 016.
+    button->setAutoRaise(false);
     button->setToolButtonStyle(Qt::ToolButtonTextOnly);
     button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
@@ -109,7 +131,10 @@ void ToolPalette::add_button(Action action, const QString& text, const QString& 
     // The shortcut goes on the face of the button, not only in a tooltip: the
     // complaint that produced this palette was not knowing whether a key had
     // done anything, and a hint you have to hover to find does not answer that.
-    button->setText(shortcut.isEmpty() ? text : QStringLiteral("%1\t%2").arg(text, shortcut));
+    // Separated with spaces, not a tab -- QToolButton does not expand tabs, so
+    // a tab here renders as a stray glyph or as nothing at all.
+    button->setText(shortcut.isEmpty() ? text
+                                       : QStringLiteral("%1   (%2)").arg(text, shortcut));
     button->setToolTip(description.isEmpty() ? text
                                              : QStringLiteral("%1\n%2").arg(text, description));
 

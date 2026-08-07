@@ -58,6 +58,10 @@ Q_SIGNALS:
     /// rate to the transport. The panel does not own the clock.
     void shuttle_changed();
 
+    /// Emitted when the playhead was moved by the user -- an arrow key or a drag
+    /// in the ruler -- so the window can re-anchor the playback clock there.
+    void playhead_moved(std::int64_t frame);
+
     /// Emitted after every action, so the palette can show which tool and edge
     /// are live and the window can describe the state. This is what makes a key
     /// press visibly do something even when it changes no clip.
@@ -71,6 +75,25 @@ Q_SIGNALS:
 protected:
     void keyPressEvent(QKeyEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+
+private:
+    /// What a press started. A drag is one gesture and must produce one undo
+    /// entry, so the commit happens on release rather than on every move.
+    enum class Drag : std::uint8_t {
+        none,
+        clip,      ///< Moving the selected clip along its track.
+        playhead,  ///< Scrubbing in the ruler.
+    };
+
+    [[nodiscard]] timeline::Ticks tick_at(int x) const;
+    [[nodiscard]] int x_of_tick(timeline::Ticks tick) const;
+    /// The clip under `position`, or null.
+    [[nodiscard]] const timeline::Clip* clip_at(const QPoint& position,
+                                                timeline::TrackId* track) const;
+    void scrub_to(int x);
 
 private:
     timeline::Document& document_;
@@ -79,6 +102,11 @@ private:
     const edit::CommandMap& map_;
     QString last_message_;
     std::int64_t playhead_frame_ = 0;
+
+    Drag drag_ = Drag::none;
+    timeline::Ticks drag_origin_tick_ = 0;   ///< Where the press landed.
+    timeline::Ticks drag_start_ = 0;         ///< The clip's start when the drag began.
+    timeline::Ticks drag_offset_ = 0;        ///< Live offset, drawn but not committed.
 };
 
 }  // namespace rf::app

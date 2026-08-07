@@ -113,6 +113,13 @@ MainWindow::MainWindow(QWidget* parent)
         timeline_panel_->setFocus();
     });
 
+    connect(timeline_panel_, &TimelinePanel::playhead_moved, this, [this](std::int64_t frame) {
+        // The user put the playhead here, so the clock re-anchors rather than
+        // fighting them on the next tick.
+        transport_->seek(wall_clock_.now(), frame);
+        timeline_panel_->set_playhead_frame(frame);
+    });
+
     connect(timeline_panel_, &TimelinePanel::shuttle_changed, this, [this] {
         const playback::Nanoseconds now = wall_clock_.now();
         if (Result<void> applied = transport_->apply(edit_state_.shuttle, now); !applied) {

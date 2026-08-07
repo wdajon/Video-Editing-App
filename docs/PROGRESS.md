@@ -393,12 +393,74 @@ asserted "exactly one dock" and failed the moment a second *real* panel arrived 
 the opposite of its purpose. It now asserts every dock has content and a stable
 object name, which is what M0's rule actually says.
 
+### Iteration 9 — Adobe's real defaults, and the mouse
+
+Two reports from the project owner, both correct.
+
+**"The tools do not work."** They effectively did not. Slip and slide required
+selecting a tool *and then* pressing a trim chord — two keystrokes before
+anything moved, the first changing nothing visible. Adobe's page says Premiere
+does not work that way at all.
+
+**"This is also why I didn't want an only-keyboard video editor."** M4's gate is
+*the full trim set driven by keyboard only*, and that phrasing quietly became the
+whole design. The gate was a floor, not a ceiling, and reading it as a ceiling
+was the mistake.
+
+**The page was finally read, and it took a browser rather than a fetch.** Two
+`WebFetch` attempts had timed out and I twice reported the page as unavailable
+and carried on with what earlier searches suggested. A browser was available the
+whole time. Loaded in it, the page reads fine — the failure was mine, not the
+source's.
+
+What it says, transcribed into ADR 016 and now bound exactly:
+
+| Command | Key |
+|---|---|
+| Nudge Clip Selection Left / Right One Frame | `Alt+←` / `Alt+→` |
+| Slip Clip Selection Left / Right One Frame | `Ctrl+Alt+←` / `Ctrl+Alt+→` |
+| Slide Clip Selection Left / Right One Frame | `Alt+,` / `Alt+.` |
+| Step Backward / Forward | `←` / `→` |
+| Play | `Space` |
+
+Five-frame variants add `Shift`. **All of these act on the clip selection with no
+tool involved** — one chord, and something moves. That is the correction that
+matters.
+
+Checked rather than assumed: the page assigns **no** Timeline *Trim Backward /
+Forward*, and `Ctrl+←`/`Ctrl+→` appear only under the Program Monitor as *Nudge
+Selected Object*. So ReelForge's ripple and roll trim keys are its own and are
+now labelled as such instead of implied to be Premiere's (D26).
+
+**The timeline takes a mouse.** Click to select, drag to move, drag the ruler to
+scrub. A drag is one undo entry — the clip follows the pointer and a single
+command is executed on release, because committing per mouse-move would fill the
+history with hundreds of steps. A drag ending where it started is a click, with
+no command and no modified flag. An illegal drop is refused and explained rather
+than clamped to the nearest legal spot, which would move the clip somewhere
+nobody pointed at. Dragging moves the whole link group, as a keyboard nudge does.
+
+**Why the palette looked dead:** `setAutoRaise(true)` draws a `QToolButton` flat,
+and a flat checked button is nearly indistinguishable from an unchecked one. The
+tool *was* selected; it just looked identical. Auto-raise is off, and the
+shortcut is separated with spaces rather than a tab, which `QToolButton` does not
+expand.
+
+```
+100% tests passed, 0 tests failed out of 488     (windows-debug)
+100% tests passed, 0 tests failed out of 488     (windows-release)
+
+edit = 63, app = 73
+```
+
+`nudge` joined `TrimKind`, so moving a clip reuses the atomicity, link-group and
+undo machinery the trims already had rather than growing a second path.
+
 ### Next action
 
-Unchanged and still not code I can write: CI needs to run against iterations 4
-to 8, and the owner needs to run `reelforge --demo-timeline` again — this time
-the Tools panel says what every key is, so "did that work?" has an answer on
-screen.
+Still not code I can write: CI against iterations 4–9, and the owner running
+`reelforge --demo-timeline` — this time slip and slide move on one keypress, and
+clips can be dragged.
 
 ## M3 — GPU compositor + Program monitor playback
 

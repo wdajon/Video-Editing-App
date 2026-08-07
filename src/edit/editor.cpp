@@ -1,5 +1,6 @@
 #include "rf/edit/editor.hpp"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -11,6 +12,11 @@ namespace {
 using timeline::Clip;
 using timeline::Track;
 using timeline::TrimKind;
+
+/// Adobe's "Five Frames" commands. A constant rather than
+/// `EditState::large_trim_frames`, which is the *trim* offset and is a separate
+/// preference in Premiere too.
+constexpr int kMany = 5;
 
 /// Index of `track` among the document's tracks, or npos.
 [[nodiscard]] std::size_t index_of_track(const timeline::Document& document,
@@ -63,6 +69,19 @@ Result<void> Editor::apply_trim(int frames) {
     const timeline::Ticks delta =
         static_cast<timeline::Ticks>(frames) * document_.ticks_per_frame();
     return stack_.execute(document_, timeline::make_trim(state_.clip, kind.value(), delta));
+}
+
+Result<void> Editor::apply_direct(TrimKind kind, int frames) {
+    if (!state_.clip.is_valid()) {
+        return Error{Errc::not_found, "select a clip first"};
+    }
+    if (document_.find_clip(state_.clip) == nullptr) {
+        return Error{Errc::not_found,
+                     to_string(state_.clip) + " is selected but no longer exists"};
+    }
+    const timeline::Ticks delta =
+        static_cast<timeline::Ticks>(frames) * document_.ticks_per_frame();
+    return stack_.execute(document_, timeline::make_trim(state_.clip, kind, delta));
 }
 
 void Editor::select_first_clip_of(timeline::TrackId track) {
@@ -155,6 +174,38 @@ Result<void> Editor::perform(Action action) {
 
         case Action::select_in_edge:  state_.edge = Edge::in;  return ok();
         case Action::select_out_edge: state_.edge = Edge::out; return ok();
+
+        case Action::nudge_backward:      return apply_direct(TrimKind::nudge, -1);
+        case Action::nudge_forward:       return apply_direct(TrimKind::nudge, 1);
+        case Action::nudge_backward_many: return apply_direct(TrimKind::nudge, -kMany);
+        case Action::nudge_forward_many:  return apply_direct(TrimKind::nudge, kMany);
+
+        case Action::slip_backward:       return apply_direct(TrimKind::slip, -1);
+        case Action::slip_forward:        return apply_direct(TrimKind::slip, 1);
+        case Action::slip_backward_many:  return apply_direct(TrimKind::slip, -kMany);
+        case Action::slip_forward_many:   return apply_direct(TrimKind::slip, kMany);
+
+        case Action::slide_backward:      return apply_direct(TrimKind::slide, -1);
+        case Action::slide_forward:       return apply_direct(TrimKind::slide, 1);
+        case Action::slide_backward_many: return apply_direct(TrimKind::slide, -kMany);
+        case Action::slide_forward_many:  return apply_direct(TrimKind::slide, kMany);
+
+        case Action::step_backward:
+            // The playhead stops at zero rather than going negative: there is no
+            // timeline before the start of the sequence.
+            state_.playhead_frame = std::max<std::int64_t>(0, state_.playhead_frame - 1);
+            return ok();
+        case Action::step_forward:
+            ++state_.playhead_frame;
+            return ok();
+        case Action::play_stop:
+            // Space is a toggle in every editor: play if stopped, stop if not.
+            if (state_.shuttle.is_stopped()) {
+                state_.shuttle.forward();
+            } else {
+                state_.shuttle.stop();
+            }
+            return ok();
 
         case Action::shuttle_forward:       state_.shuttle.forward();       return ok();
         case Action::shuttle_backward:      state_.shuttle.backward();      return ok();

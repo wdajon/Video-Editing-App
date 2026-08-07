@@ -32,6 +32,23 @@ constexpr NamedAction kActionNames[] = {
     {Action::select_in_edge, "select_in_edge"},
     {Action::select_out_edge, "select_out_edge"},
 
+    {Action::nudge_backward, "nudge_backward"},
+    {Action::nudge_forward, "nudge_forward"},
+    {Action::nudge_backward_many, "nudge_backward_many"},
+    {Action::nudge_forward_many, "nudge_forward_many"},
+    {Action::slip_backward, "slip_backward"},
+    {Action::slip_forward, "slip_forward"},
+    {Action::slip_backward_many, "slip_backward_many"},
+    {Action::slip_forward_many, "slip_forward_many"},
+    {Action::slide_backward, "slide_backward"},
+    {Action::slide_forward, "slide_forward"},
+    {Action::slide_backward_many, "slide_backward_many"},
+    {Action::slide_forward_many, "slide_forward_many"},
+
+    {Action::step_backward, "step_backward"},
+    {Action::step_forward, "step_forward"},
+    {Action::play_stop, "play_stop"},
+
     {Action::shuttle_forward, "shuttle_forward"},
     {Action::shuttle_backward, "shuttle_backward"},
     {Action::shuttle_stop, "shuttle_stop"},

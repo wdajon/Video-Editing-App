@@ -53,6 +53,25 @@ enum class Action : std::uint16_t {
     select_in_edge,
     select_out_edge,
 
+    // Adobe's Timeline-panel commands, which act on the clip selection directly
+    // and need no tool. One chord, and something moves. See ADR 016.
+    nudge_backward,
+    nudge_forward,
+    nudge_backward_many,
+    nudge_forward_many,
+    slip_backward,
+    slip_forward,
+    slip_backward_many,
+    slip_forward_many,
+    slide_backward,
+    slide_forward,
+    slide_backward_many,
+    slide_forward_many,
+
+    step_backward,  ///< Move the playhead one frame.
+    step_forward,
+    play_stop,      ///< Space: play at 1x, or stop if already running.
+
     shuttle_forward,       ///< L.
     shuttle_backward,      ///< J.
     shuttle_stop,          ///< K.

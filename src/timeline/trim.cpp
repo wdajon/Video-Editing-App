@@ -198,6 +198,13 @@ struct ShiftRoom {
             range.max_delta = tail(self);
             return range;
 
+        case TrimKind::nudge:
+            // Straight into the free space either side. Nothing else moves, so
+            // the gaps are the whole of the limit.
+            range.min_delta = -where.space_before();
+            range.max_delta = where.space_after();
+            return range;
+
         case TrimKind::slide: {
             // Each side contributes independently, so the range is the tightest
             // of what both allow. Start from the widest possible and narrow.
@@ -326,6 +333,10 @@ struct ShiftRoom {
 
         case TrimKind::slip:
             self.source_in += delta;
+            break;
+
+        case TrimKind::nudge:
+            self.start += delta;
             break;
 
         case TrimKind::slide: {
@@ -457,6 +468,7 @@ std::string_view to_string(TrimKind kind) noexcept {
         case TrimKind::roll:       return "Roll Edit";
         case TrimKind::slip:       return "Slip";
         case TrimKind::slide:      return "Slide";
+        case TrimKind::nudge:      return "Move Clip";
     }
     return "Trim";
 }

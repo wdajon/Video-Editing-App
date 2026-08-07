@@ -31,9 +31,14 @@ fact. Get the number from the suite:
 ctest --preset windows-debug
 ```
 
-At M4 iteration 8 (2026-08-06) that was **472**: core 48, media 92, timeline 130,
-edit 54, gpu 42, playback 40, app 66. Treat it as a dated snapshot, not a claim
+At M4 iteration 9 (2026-08-06) that was **488**: core 48, media 92, timeline 130,
+edit 63, gpu 42, playback 40, app 73. Treat it as a dated snapshot, not a claim
 about now.
+
+**Adobe's shortcut page is readable — through the browser tool, not `WebFetch`,
+which times out on it.** Two sessions' worth of "the page could not be fetched"
+was a tooling mistake, not a property of the source. ADR 016 has the transcribed
+table; go back to the page for anything it does not cover.
 
 **Two things are outstanding and a fresh session must not read past them.** CI
 has never run against M4 iterations 4, 5 or 6 — GitHub Actions was in a major
@@ -55,8 +60,17 @@ or press, they run the same code. The status bar shows the live tool, the
 selected clip and the armed edge, which is how you tell a keystroke registered
 when it changes no clip.
 
-`L`, `J` and `K` shuttle the playhead — and only the playhead, because nothing
-decodes at the shuttle rate yet (D25).
+**Mouse:** click a clip to select it, drag it to move it, drag the ruler strip at
+the top to move the playhead.
+
+**Keys, Adobe's own** (ADR 016, read from their page): `Ctrl+Alt+←/→` slips,
+`Alt+,`/`Alt+.` slides, `Alt+←/→` nudges, `←`/`→` step the playhead, `Space`
+plays. All act on the selected clip with **no tool needed**. Add `Shift` for five
+frames. `L`, `J`, `K` shuttle — the playhead only, because nothing decodes at the
+shuttle rate yet (D25).
+
+Ripple and roll still use a tool (`B`, `N`) plus `[`/`]` and `Ctrl+←/→`, which
+are **ReelForge's own keys, not Premiere's** (D26).
 
 The flag exists because the panel's painting has no automated oracle (D23) and
 neither does the feel of a keyboard trim. Both need a person. There is no project

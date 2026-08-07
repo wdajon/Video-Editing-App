@@ -181,6 +181,85 @@ TEST(KeyboardWorkflow, TheWholeTrimSetFromTheKeyboardAndBackAgain) {
     EXPECT_EQ(session.stack.undo_depth(), 1u) << "redo is bound too";
 }
 
+// --- Adobe's direct commands, which need no tool (ADR 016) -------------------
+
+TEST(KeyboardWorkflow, SlipWorksInOneChordWithNoToolSelected) {
+    // The defect the owner hit: slip needed a tool *and* a trim chord, so the
+    // first keystroke changed nothing visible and the feature looked broken.
+    Session session;
+    const CommandMap map = CommandMap::defaults();
+    ASSERT_EQ(session.state.tool, Tool::selection) << "no tool chosen, deliberately";
+
+    press(session, map, "Ctrl+Alt+Right");
+    EXPECT_EQ(session.clip(session.b).source_in, 31 * kFrame);
+    EXPECT_EQ(session.clip(session.b).start, 30 * kFrame) << "slip does not move the clip";
+}
+
+TEST(KeyboardWorkflow, SlideWorksInOneChordWithNoToolSelected) {
+    Session session;
+    const CommandMap map = CommandMap::defaults();
+    press(session, map, "Alt+.");
+    EXPECT_EQ(session.clip(session.b).start, 31 * kFrame);
+    EXPECT_EQ(session.clip(session.a).duration, 31 * kFrame) << "the neighbour absorbed it";
+}
+
+TEST(KeyboardWorkflow, NudgeMovesTheClipIntoFreeSpaceOnly) {
+    Session session;
+    const CommandMap map = CommandMap::defaults();
+    // Butt-joined on both sides, so there is nowhere to nudge to.
+    Editor editor = session.editor();
+    EXPECT_TRUE(editor.perform(Action::nudge_forward).has_error())
+        << "a nudge with no gap must be refused, not absorbed by a neighbour";
+
+    // Open a gap by removing the clip after it, then nudge into it.
+    ASSERT_TRUE(session.document.remove_clip(session.c).has_value());
+    press(session, map, "Alt+Right");
+    EXPECT_EQ(session.clip(session.b).start, 31 * kFrame);
+    EXPECT_EQ(session.clip(session.a).duration, 30 * kFrame) << "a nudge changes no neighbour";
+}
+
+TEST(KeyboardWorkflow, FiveFrameVariantsMoveFiveFrames) {
+    Session session;
+    const CommandMap map = CommandMap::defaults();
+    press(session, map, "Ctrl+Alt+Shift+Right");
+    EXPECT_EQ(session.clip(session.b).source_in, 35 * kFrame);
+}
+
+TEST(KeyboardWorkflow, ArrowKeysStepThePlayheadAndSpaceTogglesPlayback) {
+    Session session;
+    const CommandMap map = CommandMap::defaults();
+
+    press(session, map, "Right");
+    press(session, map, "Right");
+    EXPECT_EQ(session.state.playhead_frame, 2);
+    press(session, map, "Left");
+    EXPECT_EQ(session.state.playhead_frame, 1);
+
+    press(session, map, "Space");
+    EXPECT_FALSE(session.state.shuttle.is_stopped());
+    press(session, map, "Space");
+    EXPECT_TRUE(session.state.shuttle.is_stopped()) << "space is a toggle";
+}
+
+TEST(KeyboardWorkflow, ThePlayheadStopsAtTheStartOfTheSequence) {
+    Session session;
+    const CommandMap map = CommandMap::defaults();
+    Editor editor = session.editor();
+    for (int i = 0; i < 5; ++i) {
+        ASSERT_TRUE(editor.perform(Action::step_backward).has_value());
+    }
+    EXPECT_EQ(session.state.playhead_frame, 0) << "there is no timeline before zero";
+}
+
+TEST(KeyboardWorkflow, ADirectCommandWithNothingSelectedSaysSo) {
+    Session session;
+    session.state.clip = ClipId{};
+    Editor editor = session.editor();
+    const auto refused = editor.perform(Action::slip_forward);
+    ASSERT_TRUE(refused.has_error());
+    EXPECT_EQ(refused.error().code(), Errc::not_found);
+}
+
 // --- frames, not ticks -------------------------------------------------------
 
 TEST(KeyboardWorkflow, ALargeTrimMovesTheConfiguredNumberOfFrames) {

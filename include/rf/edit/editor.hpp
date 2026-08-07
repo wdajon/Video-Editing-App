@@ -8,6 +8,8 @@
 #ifndef RF_EDIT_EDITOR_HPP
 #define RF_EDIT_EDITOR_HPP
 
+#include <cstdint>
+
 #include "rf/core/result.hpp"
 #include "rf/edit/action.hpp"
 #include "rf/edit/command_map.hpp"
@@ -30,6 +32,13 @@ struct EditState {
     /// rate to a playback clock, which is what keeps `rf_edit` free of any
     /// dependency on playback. See docs/adr/014-jkl-shuttle.md.
     Shuttle shuttle;
+
+    /// Playhead position in frames.
+    ///
+    /// Removed in ADR 012 for being written and never read; back because it now
+    /// has readers -- the Timeline draws it, the arrow keys step it, and the
+    /// window keeps the playback clock in step with it.
+    std::int64_t playhead_frame = 0;
 
     /// Frames a "many" trim moves. Premiere's default is 5, and it is a user
     /// preference there too -- so it lives here rather than as a literal in the
@@ -66,6 +75,9 @@ public:
 
 private:
     [[nodiscard]] Result<void> apply_trim(int frames);
+    /// Applies `kind` to the selection directly, whatever tool is active. This
+    /// is how Adobe's slip, slide and nudge commands work (ADR 016).
+    [[nodiscard]] Result<void> apply_direct(timeline::TrimKind kind, int frames);
     [[nodiscard]] Result<void> select_clip_by_offset(int offset);
     [[nodiscard]] Result<void> select_track_by_offset(int offset);
     /// Selects the first clip of `track`, or clears the clip if it has none.

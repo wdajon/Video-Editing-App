@@ -37,6 +37,10 @@ enum class TrimKind : std::uint8_t {
     slip = 3,
     /// Move the clip along the timeline; its neighbours absorb the difference.
     slide = 4,
+    /// Move the clip into free space beside it, changing nothing else. Premiere
+    /// calls this nudging. Unlike a slide, no neighbour gives anything up, so it
+    /// is bounded by the gaps rather than by the neighbours' media.
+    nudge = 5,
 };
 
 [[nodiscard]] std::string_view to_string(TrimKind kind) noexcept;
