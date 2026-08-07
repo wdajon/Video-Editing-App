@@ -29,6 +29,7 @@ target_link_libraries(rf_app
         rf::gpu
         rf::media
         rf::playback
+        rf::render
         rf::timeline
         Qt6::Widgets
     PRIVATE

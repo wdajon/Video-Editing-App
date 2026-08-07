@@ -15,7 +15,12 @@ constexpr int kClips = 4;
 
 }  // namespace
 
-Result<void> build_demo_timeline(timeline::Document& document) {
+std::string demo_media_relative_path() {
+    return "tests/fixtures/media/bars_320x240_30fps_h264_aac.mp4";
+}
+
+Result<void> build_demo_timeline(timeline::Document& document,
+                                 const std::string& video_source) {
     if (!document.tracks().empty()) {
         return Error{Errc::already_exists,
                      "the demo timeline needs an empty document; this one already has " +
@@ -31,12 +36,16 @@ Result<void> build_demo_timeline(timeline::Document& document) {
         return audio.error();
     }
 
-    // Two seconds each, cut from the middle of a six-second source, so every
-    // clip has two seconds of handle at both ends and no trim runs out of media
-    // in the first few keystrokes.
+    // Twenty frames each, cut from the middle of a sixty-frame source: a third
+    // of the media used, a third of handle either side.
+    //
+    // Sixty frames because that is exactly what the repository's fixture holds
+    // (two seconds at 30 fps). A demo that claimed more would describe media the
+    // file does not have, and rendering it would fail on a frame that was never
+    // there -- which is the same lie as a placeholder frame, told earlier.
     const Ticks frame = document.ticks_per_frame();
-    const Ticks length = 60 * frame;
-    const Ticks handle = 60 * frame;
+    const Ticks length = 20 * frame;
+    const Ticks handle = 20 * frame;
     const Ticks source_length = handle + length + handle;
 
     // A gap before the last pair only.
@@ -46,13 +55,17 @@ Result<void> build_demo_timeline(timeline::Document& document) {
     // offer both. So the first three are butt-joined -- that is where ripple,
     // roll, slip and slide all work, and it is the clip the demo selects -- and
     // the last one sits past a gap, which is where a nudge has somewhere to go.
-    const Ticks gap = 30 * frame;
+    const Ticks gap = 10 * frame;
 
     for (int i = 0; i < kClips; ++i) {
         const std::string name = "demo_" + std::to_string(i + 1);
         const Ticks start = static_cast<Ticks>(i) * length + (i >= kClips - 1 ? gap : 0);
 
-        Result<ClipId> picture = document.add_clip(video.value(), name + ".mov", handle, start,
+        // Every picture clip points at the same file when one is supplied: the
+        // demo is about the edit, and four copies of one source still exercise
+        // every trim while keeping the decoder cache honest about reuse.
+        const std::string picture_source = video_source.empty() ? name + ".mov" : video_source;
+        Result<ClipId> picture = document.add_clip(video.value(), picture_source, handle, start,
                                                    length, source_length);
         if (!picture) {
             return picture.error();

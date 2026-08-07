@@ -10,7 +10,7 @@ Repository: https://github.com/wdajon/Video-Editing-App (public)
 
 ## READ THIS FIRST: most of M4 is not on `main`
 
-`main` is at **M4 iteration 3**. Eight further commits live on branches, none
+`main` is at **M4 iteration 3**. Nine further commits live on branches, none
 merged, because **GitHub Actions has been in a major outage since 2026-08-06
 15:22 UTC** and nothing has been verified on anything but MSVC.
 
@@ -18,13 +18,13 @@ merged, because **GitHub Actions has been in a major outage since 2026-08-06
 |---|---|---|
 | `main` | through M4 i3 (linked clips) | last CI-verified point |
 | `m4-command-map` | i4 — the command map | **PR #4 open**, CI never ran |
-| `m4-qt-panels` | i5–i11 — panels, workspaces, JKL, mouse, Adobe bindings, Tools strip | stacked on `m4-command-map`, **no PR** |
+| `m4-qt-panels` | i5–i12 — panels, workspaces, JKL, mouse, Adobe bindings, Tools strip, the render path | stacked on `m4-command-map`, **no PR** |
 
 ```powershell
 git checkout m4-qt-panels   # everything described below lives here
 ```
 
-**Do not merge either branch until CI is green on it.** Iterations 4–11 have
+**Do not merge either branch until CI is green on it.** Iterations 4–12 have
 never been compiled by GCC or Clang and have never run under ASan, UBSan or
 TSan; every earlier milestone leaned on those jobs. Check with:
 
@@ -38,14 +38,16 @@ so the stack lands in order.
 
 ### What to do first
 
-1. **Check whether CI has recovered** and, if so, get iterations 4–11 through it.
+1. **Check whether CI has recovered** and, if so, get iterations 4–12 through it.
    Nothing should merge before that.
 2. **Ask the project owner to run `--demo-timeline`** and say whether the panel
    behaves. M4 cannot be called done without it, the same way M3 could not.
-3. **Then D25 — connect the Program monitor.** There is no picture anywhere in
-   the application. Decode and compositing both work and are measured; nothing
-   routes them into the window. It is what makes slip meaningful, what gives JKL
-   something to play, and the largest single gap in the editor.
+3. **Then D30 — embed the Program monitor.** A timeline now renders to a picture
+   (`--render-frame`, ADR 018), but nothing presents at the shuttle rate, so `L`
+   still moves only the playhead. What remains is putting the `ProgramMonitor`
+   `QWindow` into the widget tree and driving it from the transport. The hard
+   part was never presentation — it was knowing what to present, and that is
+   done.
 
 Do **not** start M5 until M4's two blockers above are cleared. The milestone
 ladder is not advisory (see `docs/MISSION.md`).
@@ -60,7 +62,7 @@ ladder is not advisory (see `docs/MISSION.md`).
 | M1 — probe, decode, frame-accurate seek | **Gate met.** 200/200 random seeks correct on a 10-min 4K file. Performance budget **not** met — see D9. |
 | M2 — timeline model + undo/redo | **Gate met.** 10,000-operation fuzz, undo returns byte-identical. |
 | M3 — GPU compositor + playback | **Gate met** 2026-08-05. 1800 frames presented, 0 dropped, p99 36.67 ms, confirmed visually by the project owner. See the caveats in `PROGRESS.md`. |
-| M4 — panels, docking, workspaces, JKL | **Iteration 11, on `m4-qt-panels`. Gate met mechanically on Windows** — the full trim set driven by `QTest::keyClick` on a real panel, plus JKL, a Tools strip and mouse editing (ADR 009–017). **Not confirmed by CI** and **not signed off by the owner**. JKL moves a playhead, not a picture (D25). |
+| M4 — panels, docking, workspaces, JKL | **Iteration 12, on `m4-qt-panels`. Gate met mechanically on Windows** — the full trim set driven by `QTest::keyClick` on a real panel, plus JKL, a Tools strip, mouse editing and a working render path (ADR 009–018). **Not confirmed by CI** and **not signed off by the owner**. A timeline renders to a picture; nothing presents it live yet (D30). |
 | M5 onward | Not started. |
 
 Zero warnings at `/W4 /WX` and `-Wall -Wextra -Werror`.
@@ -75,9 +77,9 @@ fact. Get the number from the suite:
 ctest --preset windows-debug
 ```
 
-At M4 iteration 11 (2026-08-06, on `m4-qt-panels`) that was **496**: core 48,
-media 92, timeline 130, edit 63, gpu 42, playback 40, app 81. Treat it as a dated
-snapshot, not a claim about now.
+At M4 iteration 12 (2026-08-06, on `m4-qt-panels`) that was **515**: core 48,
+media 92, timeline 141, edit 63, gpu 42, playback 40, render 8, app 81. Treat it
+as a dated snapshot, not a claim about now.
 
 **Adobe's shortcut page is readable — through the browser tool, not `WebFetch`,
 which times out on it.** Two sessions' worth of "the page could not be fetched"
@@ -85,7 +87,7 @@ was a tooling mistake, not a property of the source. ADR 016 has the transcribed
 table; go back to the page for anything it does not cover.
 
 **Two things block calling M4 done, and neither is code.** CI has never run
-against iterations 4–11 (see the top of this file). And the project owner has not
+against iterations 4–12 (see the top of this file). And the project owner has not
 signed off on the panel; its painting has no oracle (D23), exactly as
 presentation has none (ADR 008), so a person has to look at it — M3's gate needed
 the same.
@@ -96,8 +98,9 @@ the same.
 .\build\windows-release\bin\reelforge.exe --demo-timeline
 ```
 
-Four two-second clips on V1, each linked to its sound on A1, with two seconds of
-handle at both ends. The **first three are butt-joined** — that is where ripple,
+Four twenty-frame clips on V1, each linked to its sound on A1, with twenty frames
+of handle at both ends -- sized to the sixty-frame fixture the repository ships,
+so the same demo also renders. The **first three are butt-joined** — that is where ripple,
 roll, slip and slide work, and clip 2 is selected at launch — and the **fourth
 sits past a gap**, which is where a nudge has somewhere to go. Those two wants
 are opposites, so no single clip can serve both.
@@ -108,7 +111,7 @@ Every other command is in the Clip, Sequence, Playback and Edit menus with its
 shortcut beside it. The status bar shows the live tool, the selected clip, its
 position and **its source range** — the last of those is what makes slip
 observable at all, since slip moves neither the clip nor its length and there is
-no picture on screen (D25).
+no picture on screen yet (D30).
 
 **Mouse:** click a clip to select it, drag it to move it, drag the ruler strip at
 the top to move the playhead.
@@ -123,11 +126,22 @@ $env:QT_QPA_PLATFORM='offscreen'
 No test can see that a panel has covered the application; two such defects
 reached the project owner before this existed.
 
+### Seeing a timeline frame render
+
+```powershell
+.\build\windows-release\bin\reelforge.exe --demo-timeline --render-frame 5 --out frame5.png
+```
+
+The whole real path: model, decoder, converter, compositor. `testsrc2` burns its
+frame number into the picture, so this doubles as an oracle for the source-frame
+arithmetic -- clip 1 begins twenty frames in, so timeline frame 5 must read
+`25` and frame 30 must read `30` (ADR 018).
+
 **Keys, Adobe's own** (ADR 016, read from their page): `Ctrl+Alt+←/→` slips,
 `Alt+,`/`Alt+.` slides, `Alt+←/→` nudges, `←`/`→` step the playhead, `Space`
 plays. All act on the selected clip with **no tool needed**. Add `Shift` for five
 frames. `L`, `J`, `K` shuttle — the playhead only, because nothing decodes at the
-shuttle rate yet (D25).
+shuttle rate yet (D30).
 
 Ripple and roll still use a tool (`B`, `N`) plus `[`/`]` and `Ctrl+←/→`, which
 are **ReelForge's own keys, not Premiere's** (D26).
@@ -266,9 +280,10 @@ Full detail in `docs/BACKLOG.md`. The ones that shape upcoming work:
   extraction stays confined to one module.
 - **D8** — every decoded frame is copied out of libav. Correct and portable, and
   too slow for the M3 playback budget. Needs a zero-copy path to the GPU.
-- **D25** — JKL shuttles the playback clock and the Timeline's playhead, but
-  nothing decodes or presents at the shuttle rate, so pressing L shows no video.
-  The Program monitor is outside the widget tree by design (ADR 013).
+- **D30** — a timeline renders to a picture (`--render-frame`, ADR 018), but
+  nothing presents it *live*: the Program monitor is still outside the widget
+  tree, so pressing L moves only the playhead. The remaining half of D25, and
+  the next thing to build.
 - **D23** — the Timeline panel's painting has no oracle. Tests prove it does not
   crash, not that anyone can use it.
 - **D20** — a 1/90000 tick base cannot express 23.976 fps, so such a project
