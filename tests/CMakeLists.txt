@@ -129,6 +129,7 @@ if(RF_BUILD_APP)
         app/key_translation_test.cpp
         app/main_window_test.cpp
         app/timeline_panel_test.cpp
+        app/tool_palette_test.cpp
         app/transport_test.cpp
         app/window_title_test.cpp)
 

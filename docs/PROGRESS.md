@@ -339,11 +339,66 @@ The smoke run matters because no test launches the actual binary with the flag �
 the suite builds the document directly, and a broken `main` would not have shown
 up in it.
 
+### Iteration 8 — buttons, because the keyboard was unverifiable
+
+**The owner ran the demo and could not tell whether the shortcuts worked.** That
+is a defect, not a documentation problem: `B` selects the ripple tool and the
+window looked identical afterwards, so three keystrokes in a row changed nothing
+visible. A keyboard-first application still has to be learnable, and every editor
+solves it the same way — a palette of tools you can click, each naming its key.
+
+**Increment:** a Tools panel of buttons, and state that changes visibly.
+**Falsifiable check:** the same edit performed by clicking and by pressing, with
+the two serialised documents compared.
+
+Three things make it hold together:
+
+- **A button performs an `Action`; it never reimplements one.** Both routes end
+  in `TimelinePanel::perform()`. Two entry points that each interpreted an action
+  would be two things to keep in step, and the first divergence would be a button
+  quietly doing something its shortcut did not.
+- **The label is read from the live `CommandMap`**, never written beside the
+  button, so a remapped key relabels itself and no button can advertise a
+  shortcut that does nothing. The key is on the face of the button, not only in a
+  tooltip — a hint you have to hover to find does not answer "did that work?".
+- **Selecting a tool now shows.** The palette checks the active tool and the
+  armed edge, and the status bar carries a permanent label: tool, selected clip,
+  and the edge for ripple and roll only. Slip and slide use the whole clip, so
+  showing an edge would advertise a choice with no effect.
+
+```
+100% tests passed, 0 tests failed out of 472     (windows-debug)
+100% tests passed, 0 tests failed out of 472     (windows-release, clean tree)
+
+app = 66 tests (was 54)
+```
+
+**On Adobe's shortcut page.** The owner supplied it and asked it be the source.
+It could not be fetched — two attempts timed out, the page being very large — so
+**nothing was changed on a guess**. What ReelForge binds already matches
+Premiere for the tools, the trims and JKL (ADR 012, taken from Adobe pages
+earlier in M4). The exceptions are still `[` and `]`, now D26.
+
+**Two environment failures worth recording, neither in the code.** A stray
+`reelforge.exe` from the earlier smoke run held the binary open and the release
+link failed with `LNK1168`; the smoke-run helper should verify termination rather
+than assume it. Then the half-written release binaries were refused by Windows
+Smart App Control (*"An Application Control policy has blocked this file"*, with
+enforcement confirmed on) while debug ran fine. A clean release rebuild cleared
+it. Neither was a code defect, and neither would have been diagnosable from the
+first error message alone.
+
+**An old test was guarding the wrong thing.** `DoesNotShipEmptyPanelsStandingInForRealOnes`
+asserted "exactly one dock" and failed the moment a second *real* panel arrived —
+the opposite of its purpose. It now asserts every dock has content and a stable
+object name, which is what M0's rule actually says.
+
 ### Next action
 
-Two things before M4 can be called done, and neither is code I can write: CI
-needs to run against iterations 4 to 7, and the project owner needs to run
-`reelforge --demo-timeline` and confirm the Timeline looks and behaves like one.
+Unchanged and still not code I can write: CI needs to run against iterations 4
+to 8, and the owner needs to run `reelforge --demo-timeline` again — this time
+the Tools panel says what every key is, so "did that work?" has an answer on
+screen.
 
 ## M3 — GPU compositor + Program monitor playback
 
