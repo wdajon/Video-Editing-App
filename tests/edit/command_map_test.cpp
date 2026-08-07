@@ -44,7 +44,7 @@ TEST(CommandMapTest, EveryDefaultChordParses) {
     // The default table is written as text, so a typo in it would otherwise be a
     // silently missing binding rather than a build failure.
     const CommandMap map = CommandMap::defaults();
-    EXPECT_EQ(map.size(), 22u) << map.serialise();
+    EXPECT_EQ(map.size(), 37u) << map.serialise();
 }
 
 TEST(CommandMapTest, EveryTrimActionIsReachableFromTheKeyboard) {
@@ -62,6 +62,47 @@ TEST(CommandMapTest, EveryTrimActionIsReachableFromTheKeyboard) {
           Action::undo, Action::redo}) {
         EXPECT_FALSE(map.chords_for(action).empty()) << to_string(action) << " has no key";
     }
+}
+
+TEST(CommandMapTest, MatchesAdobesTimelinePanelDefaultsExactly) {
+    // Transcribed from Adobe's default-shortcuts page, Timeline panel section,
+    // read 2026-08-06 and recorded in ADR 016. These are the commands that act
+    // on the clip selection with no tool involved.
+    const CommandMap map = CommandMap::defaults();
+
+    EXPECT_EQ(bound_to(map, "Alt+Left"), Action::nudge_backward);
+    EXPECT_EQ(bound_to(map, "Alt+Right"), Action::nudge_forward);
+    EXPECT_EQ(bound_to(map, "Alt+Shift+Left"), Action::nudge_backward_many);
+    EXPECT_EQ(bound_to(map, "Alt+Shift+Right"), Action::nudge_forward_many);
+
+    EXPECT_EQ(bound_to(map, "Ctrl+Alt+Left"), Action::slip_backward);
+    EXPECT_EQ(bound_to(map, "Ctrl+Alt+Right"), Action::slip_forward);
+    EXPECT_EQ(bound_to(map, "Ctrl+Alt+Shift+Left"), Action::slip_backward_many);
+    EXPECT_EQ(bound_to(map, "Ctrl+Alt+Shift+Right"), Action::slip_forward_many);
+
+    EXPECT_EQ(bound_to(map, "Alt+,"), Action::slide_backward);
+    EXPECT_EQ(bound_to(map, "Alt+."), Action::slide_forward);
+    EXPECT_EQ(bound_to(map, "Alt+Shift+,"), Action::slide_backward_many);
+    EXPECT_EQ(bound_to(map, "Alt+Shift+."), Action::slide_forward_many);
+
+    EXPECT_EQ(bound_to(map, "Left"), Action::step_backward);
+    EXPECT_EQ(bound_to(map, "Right"), Action::step_forward);
+    EXPECT_EQ(bound_to(map, "Space"), Action::play_stop);
+}
+
+TEST(CommandMapTest, NoChordIsBoundTwice) {
+    // Adding Adobe's defaults over an existing map is exactly where a silent
+    // collision would happen: one binding would overwrite another and a key the
+    // user relies on would quietly change meaning.
+    const CommandMap map = CommandMap::defaults();
+    const std::string text = map.serialise();
+    std::size_t bindings = 0;
+    for (const char character : text) {
+        bindings += character == '\n' ? 1 : 0;
+    }
+    // One header line plus one line per binding, and `serialise` is keyed by
+    // chord, so a collision would show up as a smaller map than the table.
+    EXPECT_EQ(bindings - 1, map.size());
 }
 
 TEST(CommandMapTest, JKLAreWhereEveryEditorPutsThem) {
