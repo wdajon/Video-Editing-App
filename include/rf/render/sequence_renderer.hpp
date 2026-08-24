@@ -24,6 +24,7 @@
 #include "rf/gpu/compositor.hpp"
 #include "rf/gpu/device.hpp"
 #include "rf/gpu/image.hpp"
+#include "rf/gpu/texture.hpp"
 #include "rf/media/decoder.hpp"
 #include "rf/timeline/document.hpp"
 
@@ -42,7 +43,26 @@ public:
     SequenceRenderer& operator=(SequenceRenderer&&) noexcept;
     ~SequenceRenderer();
 
-    /// Renders `document` at `frame`.
+    /// Renders `document` at `frame` into a texture that stays on the device.
+    ///
+    /// Nothing crosses PCIe on the way out, which is what makes playback
+    /// possible: the readback path below measured p50 65.3 ms at 1080x1920 with
+    /// one layer against a 33.33 ms budget, and a counter confirmed it was
+    /// decoding exactly one frame per frame -- so the cost was the transfers,
+    /// not the decoding. Same finding as D13, in a different place.
+    ///
+    /// The texture is owned by the renderer and is reused for every frame, so
+    /// the pointer is valid until the next call. Present it or composite from
+    /// it; do not keep it.
+    [[nodiscard]] Result<const gpu::Texture*> render_to_texture(
+        const timeline::Document& document, std::int64_t frame,
+        const std::filesystem::path& media_root = {});
+
+    /// The same frame, read back to CPU pixels.
+    ///
+    /// Implemented on top of `render_to_texture`, so the picture a monitor
+    /// presents and the picture an export writes cannot disagree -- the
+    /// arrangement M3 settled on for `composite_into` and `composite`.
     ///
     /// A frame with nothing on it renders opaque black rather than failing or
     /// returning the previous picture: a gap in the timeline is black, and
@@ -62,6 +82,16 @@ public:
     /// Decoders opened so far. Exposed because reopening a file per frame would
     /// make scrubbing unusable and would not show up as anything but slowness.
     [[nodiscard]] std::size_t open_sources() const noexcept;
+
+    /// Frames the decoders have actually materialised, across every source.
+    ///
+    /// A counter rather than a stopwatch, for the reason M1 recorded: it is
+    /// deterministic, immune to timing noise, and it answers the question a
+    /// stopwatch only hints at -- whether a "render one frame" call decoded one
+    /// frame or a hundred of them because it seeked. See `SeekCost` in
+    /// tests/media/seek_test.cpp for the same technique catching the same class
+    /// of regression.
+    [[nodiscard]] std::int64_t frames_materialised() const noexcept;
 
 private:
     class Impl;

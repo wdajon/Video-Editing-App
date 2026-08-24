@@ -34,19 +34,36 @@ namespace {
 
 class SequenceRenderer::Impl {
 public:
-    Impl(gpu::Compositor compositor, int width, int height)
-        : compositor_(std::move(compositor)), width_(width), height_(height) {}
+    Impl(gpu::Device& device, gpu::Compositor compositor, gpu::Texture target, int width,
+         int height)
+        : device_(device),
+          compositor_(std::move(compositor)),
+          target_(std::move(target)),
+          width_(width),
+          height_(height) {}
 
-    [[nodiscard]] Result<gpu::ImageRgba8> render(const timeline::Document& document,
-                                                 std::int64_t frame,
-                                                 const std::filesystem::path& media_root) {
+    [[nodiscard]] Result<const gpu::Texture*> render_to_texture(
+        const timeline::Document& document, std::int64_t frame,
+        const std::filesystem::path& media_root) {
         Result<std::vector<timeline::Layer>> visible = timeline::layers_at(document, frame);
         if (!visible) {
             return visible.error();
         }
 
-        std::vector<gpu::Layer> layers;
+        // Textures are created once and reused. Allocating one per frame would
+        // put a device allocation on the playback path, which the mission's
+        // budget forbids outright.
+        while (uploads_.size() < visible.value().size()) {
+            Result<gpu::Texture> texture = gpu::Texture::create(device_, width_, height_);
+            if (!texture) {
+                return texture.error();
+            }
+            uploads_.push_back(std::move(texture).value());
+        }
+
+        std::vector<gpu::GpuLayer> layers;
         layers.reserve(visible.value().size());
+        std::size_t slot = 0;
         for (const timeline::Layer& layer : visible.value()) {
             Result<media::VideoDecoder*> decoder = decoder_for(layer.source, media_root);
             if (!decoder) {
@@ -81,16 +98,39 @@ public:
                 return image.error().with_context(layer.source);
             }
 
-            gpu::Layer composited;
-            composited.source = std::move(image).value();
-            layers.push_back(std::move(composited));
+            if (Result<void> uploaded = uploads_[slot].upload(image.value()); !uploaded) {
+                return uploaded.error().with_context(layer.source);
+            }
+            layers.push_back(gpu::GpuLayer{&uploads_[slot], 1.0F, true});
+            ++slot;
         }
 
         // No layers composites to opaque black, which is what a gap looks like.
-        return compositor_.composite(layers, width_, height_);
+        if (Result<void> composed = compositor_.composite_into(target_, layers); !composed) {
+            return composed.error();
+        }
+        return &target_;
+    }
+
+    [[nodiscard]] Result<gpu::ImageRgba8> render(const timeline::Document& document,
+                                                 std::int64_t frame,
+                                                 const std::filesystem::path& media_root) {
+        Result<const gpu::Texture*> texture = render_to_texture(document, frame, media_root);
+        if (!texture) {
+            return texture.error();
+        }
+        return texture.value()->read_back();
     }
 
     [[nodiscard]] std::size_t open_sources() const noexcept { return decoders_.size(); }
+
+    [[nodiscard]] std::int64_t frames_materialised() const noexcept {
+        std::int64_t total = 0;
+        for (const auto& [path, decoder] : decoders_) {
+            total += decoder.frames_materialised();
+        }
+        return total;
+    }
 
 private:
     /// Decoders are kept open between frames. Reopening a file per frame would
@@ -112,7 +152,10 @@ private:
         return &inserted.first->second;
     }
 
+    gpu::Device& device_;
     gpu::Compositor compositor_;
+    gpu::Texture target_;
+    std::vector<gpu::Texture> uploads_;
     std::map<std::string, media::VideoDecoder> decoders_;
     int width_;
     int height_;
@@ -126,14 +169,24 @@ Result<SequenceRenderer> SequenceRenderer::create(gpu::Device& device, int width
     if (!compositor) {
         return compositor.error();
     }
-    return SequenceRenderer(
-        std::make_unique<Impl>(std::move(compositor).value(), width, height));
+    Result<gpu::Texture> target = gpu::Texture::create(device, width, height);
+    if (!target) {
+        return target.error();
+    }
+    return SequenceRenderer(std::make_unique<Impl>(device, std::move(compositor).value(),
+                                                   std::move(target).value(), width, height));
 }
 
 SequenceRenderer::SequenceRenderer(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 SequenceRenderer::SequenceRenderer(SequenceRenderer&&) noexcept = default;
 SequenceRenderer& SequenceRenderer::operator=(SequenceRenderer&&) noexcept = default;
 SequenceRenderer::~SequenceRenderer() = default;
+
+Result<const gpu::Texture*> SequenceRenderer::render_to_texture(
+    const timeline::Document& document, std::int64_t frame,
+    const std::filesystem::path& media_root) {
+    return impl_->render_to_texture(document, frame, media_root);
+}
 
 Result<gpu::ImageRgba8> SequenceRenderer::render(const timeline::Document& document,
                                                  std::int64_t frame,
@@ -143,6 +196,10 @@ Result<gpu::ImageRgba8> SequenceRenderer::render(const timeline::Document& docum
 
 std::size_t SequenceRenderer::open_sources() const noexcept {
     return impl_->open_sources();
+}
+
+std::int64_t SequenceRenderer::frames_materialised() const noexcept {
+    return impl_->frames_materialised();
 }
 
 }  // namespace rf::render
