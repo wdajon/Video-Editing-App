@@ -138,9 +138,13 @@ TEST_F(RendererTest, AGapRendersBlackRatherThanTheLastFrame) {
     }
 }
 
-TEST_F(RendererTest, ReusesOneDecoderAcrossFramesAndAcrossClips) {
-    // Reopening a file per frame would make scrubbing unusable and would show up
-    // as nothing but slowness.
+TEST_F(RendererTest, GivesEachClipItsOwnDecoderEvenWhenTheyShareAFile) {
+    // This asserted the opposite until iteration 15: one decoder per *file*.
+    // That is what a cache is supposed to do, and it was wrong. Two clips of one
+    // file stacked on different tracks are both visible at once, at different
+    // source frames, so a shared decoder has to seek between them on every
+    // frame -- measured at p50 23.5 ms each at 1080x1920. Keyed by clip, both
+    // play forward and neither seeks.
     SequenceRenderer renderer = make_renderer();
     Document document = Document::create(Rational{1, 90000}, Rational{30, 1}).value();
     const TrackId track = document.add_track(TrackKind::video, "V1").value();
@@ -154,7 +158,60 @@ TEST_F(RendererTest, ReusesOneDecoderAcrossFramesAndAcrossClips) {
     for (const std::int64_t frame : {0, 5, 10, 25, 30}) {
         ASSERT_TRUE(renderer.render(document, frame).has_value());
     }
-    EXPECT_EQ(renderer.open_sources(), 1u) << "two clips, one file, one decoder";
+    EXPECT_EQ(renderer.open_sources(), 2u) << "two clips, two positions, two decoders";
+}
+
+TEST_F(RendererTest, PlayingForwardDoesNotSeek) {
+    // The counter that would have caught the defect this replaced.
+    //
+    // `frames_materialised` could not: M1 optimised the decoder to stop copying
+    // frames a seek discards, so a seek decoding a hundred frames still
+    // materialises one. Neither could `frames_decoded`. Rendering consecutive
+    // frames looked identical on both counters whether it seeked or not, and it
+    // was seeking -- 23.5 of every 29.2 ms. Count the thing itself.
+    SequenceRenderer renderer = make_renderer();
+    const Document document = one_clip();
+
+    ASSERT_TRUE(renderer.render_to_texture(document, 0).has_value());
+    const std::int64_t after_first = renderer.seeks();
+
+    for (std::int64_t frame = 1; frame <= 15; ++frame) {
+        ASSERT_TRUE(renderer.render_to_texture(document, frame).has_value());
+    }
+    EXPECT_EQ(renderer.seeks(), after_first)
+        << "playing forward must not seek once the decoder is in position";
+}
+
+TEST_F(RendererTest, ScrubbingBackwardsSeeks) {
+    // The other half of the same behaviour: going somewhere the decoder is not
+    // standing has to seek, and pretending otherwise would show a stale frame.
+    SequenceRenderer renderer = make_renderer();
+    const Document document = one_clip();
+
+    ASSERT_TRUE(renderer.render_to_texture(document, 10).has_value());
+    const std::int64_t before = renderer.seeks();
+    ASSERT_TRUE(renderer.render_to_texture(document, 2).has_value());
+    EXPECT_GT(renderer.seeks(), before);
+}
+
+TEST_F(RendererTest, KeepsTheNumberOfOpenDecodersBounded) {
+    // Keyed by clip, a long timeline would otherwise accumulate one decoder per
+    // clip it had ever shown.
+    SequenceRenderer renderer = make_renderer();
+    Document document = Document::create(Rational{1, 90000}, Rational{30, 1}).value();
+    const TrackId track = document.add_track(TrackKind::video, "V1").value();
+    constexpr int kClips = 12;
+    for (int i = 0; i < kClips; ++i) {
+        ASSERT_TRUE(document
+                        .add_clip(track, fixture().string(), 0,
+                                  static_cast<Ticks>(i) * 4 * kFrame, 4 * kFrame, 60 * kFrame)
+                        .has_value());
+    }
+
+    for (int i = 0; i < kClips; ++i) {
+        ASSERT_TRUE(renderer.render_to_texture(document, i * 4).has_value());
+    }
+    EXPECT_LE(renderer.open_sources(), 8u) << "the decoder cache must not grow without bound";
 }
 
 TEST_F(RendererTest, ReportsAMissingSourceRatherThanDrawingBlack) {

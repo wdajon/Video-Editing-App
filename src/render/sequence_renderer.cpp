@@ -30,6 +30,30 @@ namespace {
     return image;
 }
 
+/// A decoder and where it is standing.
+///
+/// The position is what makes playing forward cheap: a decoder already holding
+/// frame N needs no seek to produce N.
+struct OpenSource {
+    media::VideoDecoder decoder;
+    std::int64_t next_source_frame = -1;
+    /// Render pass this was last used in, for eviction.
+    std::uint64_t touched = 0;
+};
+
+constexpr std::int64_t kUnknownPosition = -1;
+
+/// How many decoders to keep open.
+///
+/// Decoders are keyed by *clip*, not by file: two clips showing the same file at
+/// different frames need their own positions, or one of them forces a seek on
+/// every frame -- measured at p50 23.5 ms each at 1080x1920. Keying by clip
+/// means a timeline could accumulate one decoder per clip it has ever shown, so
+/// the least recently used are dropped. Eight is comfortably more than the
+/// number of layers any frame stacks and small enough that the open file handles
+/// stay unremarkable.
+constexpr std::size_t kMaxOpenDecoders = 8;
+
 }  // namespace
 
 class SequenceRenderer::Impl {
@@ -45,6 +69,7 @@ public:
     [[nodiscard]] Result<const gpu::Texture*> render_to_texture(
         const timeline::Document& document, std::int64_t frame,
         const std::filesystem::path& media_root) {
+        ++pass_;
         Result<std::vector<timeline::Layer>> visible = timeline::layers_at(document, frame);
         if (!visible) {
             return visible.error();
@@ -65,19 +90,36 @@ public:
         layers.reserve(visible.value().size());
         std::size_t slot = 0;
         for (const timeline::Layer& layer : visible.value()) {
-            Result<media::VideoDecoder*> decoder = decoder_for(layer.source, media_root);
+            Result<OpenSource*> decoder = decoder_for(layer.clip, layer.source, media_root);
             if (!decoder) {
                 return decoder.error();
             }
 
-            // Frame-accurate: the decoder seeks to the keyframe at or before the
-            // target and decodes forward, so this is the exact frame rather than
-            // the nearest one (M1).
-            if (Result<void> sought = decoder.value()->seek_to_frame(layer.source_frame);
-                !sought) {
-                return sought.error().with_context(layer.source);
+            OpenSource& open = *decoder.value();
+
+            // Seek only when the frame wanted is not the one the decoder is
+            // already standing on.
+            //
+            // A seek is frame-accurate -- it lands on the keyframe at or before
+            // the target and decodes forward (M1) -- and that is exactly why it
+            // is expensive: measured at p50 23.5 ms per frame at 1080x1920,
+            // against a 33.33 ms budget for the whole frame. Playing forward
+            // asks for consecutive frames, and for those the decoder is already
+            // in the right place.
+            if (open.next_source_frame != layer.source_frame) {
+                if (Result<void> sought = open.decoder.seek_to_frame(layer.source_frame);
+                    !sought) {
+                    open.next_source_frame = kUnknownPosition;
+                    return sought.error().with_context(layer.source);
+                }
+                ++seeks_;
             }
-            Result<std::optional<media::VideoFrame>> decoded = decoder.value()->next_frame();
+            // Unknown until the decode below succeeds: a failure part-way leaves
+            // the decoder somewhere this cannot predict, and guessing would show
+            // the wrong picture rather than merely being slow.
+            open.next_source_frame = kUnknownPosition;
+
+            Result<std::optional<media::VideoFrame>> decoded = open.decoder.next_frame();
             if (!decoded) {
                 return decoded.error().with_context(layer.source);
             }
@@ -88,6 +130,7 @@ public:
                              layer.source + " has no frame " +
                                  std::to_string(layer.source_frame)};
             }
+            open.next_source_frame = layer.source_frame + 1;
 
             Result<media::VideoFrame> rgba = media::to_rgba8(decoded.value().value());
             if (!rgba) {
@@ -124,10 +167,12 @@ public:
 
     [[nodiscard]] std::size_t open_sources() const noexcept { return decoders_.size(); }
 
+    [[nodiscard]] std::int64_t seeks() const noexcept { return seeks_; }
+
     [[nodiscard]] std::int64_t frames_materialised() const noexcept {
         std::int64_t total = 0;
-        for (const auto& [path, decoder] : decoders_) {
-            total += decoder.frames_materialised();
+        for (const auto& [path, open] : decoders_) {
+            total += open.decoder.frames_decoded();
         }
         return total;
     }
@@ -135,9 +180,11 @@ public:
 private:
     /// Decoders are kept open between frames. Reopening a file per frame would
     /// make scrubbing unusable and would show up as nothing but slowness.
-    [[nodiscard]] Result<media::VideoDecoder*> decoder_for(const std::string& source,
-                                                           const std::filesystem::path& root) {
-        if (const auto found = decoders_.find(source); found != decoders_.end()) {
+    [[nodiscard]] Result<OpenSource*> decoder_for(timeline::ClipId clip,
+                                                   const std::string& source,
+                                                   const std::filesystem::path& root) {
+        if (const auto found = decoders_.find(clip.value()); found != decoders_.end()) {
+            found->second.touched = pass_;
             return &found->second;
         }
         std::filesystem::path path(source);
@@ -148,15 +195,33 @@ private:
         if (!opened) {
             return opened.error().with_context(source);
         }
-        const auto inserted = decoders_.emplace(source, std::move(opened).value());
+        evict_if_crowded();
+        const auto inserted = decoders_.emplace(
+            clip.value(), OpenSource{std::move(opened).value(), kUnknownPosition, pass_});
         return &inserted.first->second;
+    }
+
+    /// Drops the least recently used decoder while the cache is over its cap.
+    void evict_if_crowded() {
+        while (decoders_.size() >= kMaxOpenDecoders) {
+            auto oldest = decoders_.begin();
+            for (auto it = decoders_.begin(); it != decoders_.end(); ++it) {
+                if (it->second.touched < oldest->second.touched) {
+                    oldest = it;
+                }
+            }
+            decoders_.erase(oldest);
+        }
     }
 
     gpu::Device& device_;
     gpu::Compositor compositor_;
     gpu::Texture target_;
     std::vector<gpu::Texture> uploads_;
-    std::map<std::string, media::VideoDecoder> decoders_;
+    /// Keyed by clip id. See kMaxOpenDecoders for why not by file.
+    std::map<std::uint64_t, OpenSource> decoders_;
+    std::int64_t seeks_ = 0;
+    std::uint64_t pass_ = 0;
     int width_;
     int height_;
 };
@@ -200,6 +265,10 @@ std::size_t SequenceRenderer::open_sources() const noexcept {
 
 std::int64_t SequenceRenderer::frames_materialised() const noexcept {
     return impl_->frames_materialised();
+}
+
+std::int64_t SequenceRenderer::seeks() const noexcept {
+    return impl_->seeks();
 }
 
 }  // namespace rf::render
