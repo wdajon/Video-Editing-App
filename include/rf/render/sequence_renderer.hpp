@@ -93,6 +93,16 @@ public:
     /// of regression.
     [[nodiscard]] std::int64_t frames_materialised() const noexcept;
 
+    /// Seeks performed. The counter that matters for playback: a seek is
+    /// frame-accurate and therefore expensive (p50 23.5 ms at 1080x1920), and
+    /// playing forward should need none after the first.
+    ///
+    /// `frames_materialised` cannot answer this -- M1 optimised the decoder to
+    /// stop copying frames a seek discards, so a seek that decodes a hundred
+    /// frames still materialises one. A counter is only as good as the question
+    /// it is asked.
+    [[nodiscard]] std::int64_t seeks() const noexcept;
+
 private:
     class Impl;
     explicit SequenceRenderer(std::unique_ptr<Impl> impl);

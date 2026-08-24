@@ -20,7 +20,11 @@
 #include <string>
 #include <vector>
 
+#include "rf/gpu/compositor.hpp"
 #include "rf/gpu/device.hpp"
+#include "rf/gpu/texture.hpp"
+#include "rf/media/convert.hpp"
+#include "rf/media/decoder.hpp"
 #include "rf/gpu/instance.hpp"
 #include "rf/media/probe.hpp"
 #include "rf/render/sequence_renderer.hpp"
@@ -60,6 +64,7 @@ int main(int argc, char** argv) {
     int frames = 120;
     int layers = 1;
     bool readback = false;
+    bool breakdown = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string flag = argv[i];
@@ -70,6 +75,10 @@ int main(int argc, char** argv) {
             frames = std::atoi(argv[++i]);
         } else if (flag == "--layers" && has_value) {
             layers = std::atoi(argv[++i]);
+        } else if (flag == "--breakdown") {
+            // Times the stages separately, to say where the per-frame
+            // cost actually is before anything is optimised for it.
+            breakdown = true;
         } else if (flag == "--readback") {
             // The path the Program panel used before it presented: pixels come
             // back to the CPU so a QWidget can paint them.
@@ -135,6 +144,80 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "%s\n", clip.error().to_string().c_str());
             return 1;
         }
+    }
+
+    if (breakdown) {
+        // Walks the same stages the renderer does, timing each. Not a second
+        // implementation of rendering -- it is deliberately the simplest
+        // possible sequence, so the numbers are attributable rather than
+        // entangled with the renderer's bookkeeping.
+        auto decoder = rf::media::VideoDecoder::open(source);
+        if (!decoder) {
+            std::fprintf(stderr, "%s\n", decoder.error().to_string().c_str());
+            return 1;
+        }
+        auto compositor = rf::gpu::Compositor::create(device.value());
+        auto target = rf::gpu::Texture::create(device.value(), width, height);
+        auto upload = rf::gpu::Texture::create(device.value(), width, height);
+        if (!compositor || !target || !upload) {
+            std::fprintf(stderr, "could not build the GPU objects\n");
+            return 1;
+        }
+
+        std::vector<double> seek_ms;
+        std::vector<double> decode_ms;
+        std::vector<double> convert_ms;
+        std::vector<double> gpu_ms;
+        for (int frame = 0; frame < frames; ++frame) {
+            // The renderer seeks before every frame, because it is asked for a
+            // frame index rather than "the next one". This is the only call the
+            // earlier breakdown left out, and the numbers did not add up without
+            // it -- so it is timed separately rather than assumed cheap.
+            const auto tseek = Clock::now();
+            if (auto sought = decoder.value().seek_to_frame(frame); !sought) {
+                std::fprintf(stderr, "%s\n", sought.error().to_string().c_str());
+                return 1;
+            }
+            const auto t0 = Clock::now();
+            auto decoded = decoder.value().next_frame();
+            const auto t1 = Clock::now();
+            if (!decoded || !decoded.value()) {
+                break;
+            }
+            auto rgba = rf::media::to_rgba8(decoded.value().value());
+            const auto t2 = Clock::now();
+            if (!rgba) {
+                std::fprintf(stderr, "%s\n", rgba.error().to_string().c_str());
+                return 1;
+            }
+            rf::gpu::ImageRgba8 image;
+            image.width = rgba.value().width();
+            image.height = rgba.value().height();
+            image.pixels = rgba.value().pixels();
+            if (auto put = upload.value().upload(image); !put) {
+                std::fprintf(stderr, "%s\n", put.error().to_string().c_str());
+                return 1;
+            }
+            std::vector<rf::gpu::GpuLayer> stack{{&upload.value(), 1.0F, true}};
+            if (auto composed = compositor.value().composite_into(target.value(), stack);
+                !composed) {
+                std::fprintf(stderr, "%s\n", composed.error().to_string().c_str());
+                return 1;
+            }
+            const auto t3 = Clock::now();
+
+            seek_ms.push_back(milliseconds(t0 - tseek));
+            decode_ms.push_back(milliseconds(t1 - t0));
+            convert_ms.push_back(milliseconds(t2 - t1));
+            gpu_ms.push_back(milliseconds(t3 - t2));
+        }
+
+        std::printf("\nper-frame breakdown (p50 ms)\n");
+        std::printf("  seek_to_frame    %6.2f\n", percentile(seek_ms, 0.50));
+        std::printf("  decode           %6.2f\n", percentile(decode_ms, 0.50));
+        std::printf("  yuv->rgba (cpu)  %6.2f\n", percentile(convert_ms, 0.50));
+        std::printf("  copy+upload+comp %6.2f\n", percentile(gpu_ms, 0.50));
+        return 0;
     }
 
     auto renderer = rf::render::SequenceRenderer::create(device.value(), width, height);

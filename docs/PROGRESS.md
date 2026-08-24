@@ -644,6 +644,57 @@ Layer textures are created once and reused; a test asserts the same target comes
 back on every call, because a device allocation per frame is what the mission's
 budget forbids outright.
 
+### Iteration 15 — the cost was a redundant seek, not the pixels
+
+The previous iteration removed the readback, got a 2.2x improvement, and reported
+the remaining ~30 ms as decode plus swscale plus upload. **That attribution was
+wrong**, and the way it came apart is the point.
+
+Timing the stages separately: decode 0.70 ms, swscale 1.42 ms,
+copy-upload-composite 2.02 ms. Four milliseconds out of thirty. The missing
+twenty-five was `seek_to_frame` at p50 **23.5 ms**, called once per layer per
+frame because the renderer is asked for a frame *index* rather than "the next
+one".
+
+**Two counters had already said this was fine.** `frames_materialised` reads 1.0
+per frame because M1 optimised the decoder to stop copying frames a seek
+discards. `frames_decoded` reads 1.0 because it counts frames handed out. Both
+count real things; neither counts a seek. I asked two counters a question they
+were not built to answer and believed the answer — twice, in consecutive
+iterations, in a project whose own rule is to measure.
+
+The fix is small: record where each decoder is standing and skip the seek when
+the frame wanted is the next one. Decoders are keyed by **clip** rather than by
+file, because two clips of one file on different tracks are visible at once at
+different frames and a shared decoder seeks between them every frame; the cache
+is capped at eight with LRU eviction so keying by clip cannot grow without bound.
+
+| 1080x1920, 120 frames | before | after | budget |
+|---|---|---|---|
+| 1 layer | p50 29.20 / p99 44.02 | **p50 4.67 / p99 5.19** | 33.33 |
+| 3 layers | p50 64.38 / p99 99.12 | **p50 13.86 / p99 14.60** | 33.33 |
+
+Three layers at 1080x1920 is M3's own gate workload, now rendered from a real
+timeline with 2.4x of headroom.
+
+```
+100% tests passed, 0 tests failed out of 521     (windows-debug)
+100% tests passed, 0 tests failed out of 521     (windows-release)
+```
+
+`seeks()` is now public and a test asserts sixteen consecutive frames perform no
+seek after the first — the counter that would have caught this, counting the
+thing itself. A second test asserts that scrubbing backwards *does* seek, because
+a renderer that skipped it there would show a stale frame.
+
+One existing test asserted the opposite of the new design — one decoder per
+*file* — and had to be inverted. It had encoded a cache policy that looked
+obviously right and was measurably wrong.
+
+**D33 was re-scoped rather than done.** It was filed as the bottleneck on the
+mis-attribution; swscale is 1.42 ms of a 4.67 ms frame. The shader conversion is
+still worth having and nothing is blocked on it.
+
 ### Next action
 
 There is a picture, and playback is still the gap: pressing `L` sweeps the

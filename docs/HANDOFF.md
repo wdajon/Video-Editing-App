@@ -10,7 +10,7 @@ Repository: https://github.com/wdajon/Video-Editing-App (public)
 
 ## READ THIS FIRST: most of M4 is not on `main`
 
-`main` is at **M4 iteration 3**. Eleven further commits live on branches, none
+`main` is at **M4 iteration 3**. Twelve further commits live on branches, none
 merged, because **GitHub Actions has been in a major outage since 2026-08-06
 15:22 UTC** and nothing has been verified on anything but MSVC.
 
@@ -18,13 +18,13 @@ merged, because **GitHub Actions has been in a major outage since 2026-08-06
 |---|---|---|
 | `main` | through M4 i3 (linked clips) | last CI-verified point |
 | `m4-command-map` | i4 — the command map | **PR #4 open**, CI never ran |
-| `m4-qt-panels` | i5–i14 — panels, workspaces, JKL, mouse, Adobe bindings, Tools strip, the render path, the Program panel, the device-resident preview | stacked on `m4-command-map`, **no PR** |
+| `m4-qt-panels` | i5–i15 — panels, workspaces, JKL, mouse, Adobe bindings, Tools strip, the render path, the Program panel, the device-resident preview, seek-free playback | stacked on `m4-command-map`, **no PR** |
 
 ```powershell
 git checkout m4-qt-panels   # everything described below lives here
 ```
 
-**Do not merge either branch until CI is green on it.** Iterations 4–14 have
+**Do not merge either branch until CI is green on it.** Iterations 4–15 have
 never been compiled by GCC or Clang and have never run under ASan, UBSan or
 TSan; every earlier milestone leaned on those jobs. Check with:
 
@@ -38,17 +38,16 @@ so the stack lands in order.
 
 ### What to do first
 
-1. **Check whether CI has recovered** and, if so, get iterations 4–14 through it.
+1. **Check whether CI has recovered** and, if so, get iterations 4–15 through it.
    Nothing should merge before that.
 2. **Ask the project owner to run `--demo-timeline`** and say whether the panel
    behaves. M4 cannot be called done without it, the same way M3 could not.
-3. **Then D33 — YUV to RGBA in the shader.** Measured, not guessed: with the
-   readback removed the preview renders 1080x1920 at p50 29.76 ms / p99 43.53 ms
-   against a 33.33 ms budget (ADR 019). What is left is decode plus a CPU
-   swscale pass plus an 8.3 MB upload of converted RGBA. Uploading the Y, U and V
-   planes and doing the matrix in the shader moves ~3.1 MB instead and removes
-   the swscale pass — it attacks both remaining costs at once. **D30** (presenting
-   through the swapchain so a `QWidget` need not read back at all) follows.
+3. **Then D30 — present through the swapchain.** The render engine now sustains
+   M3's gate workload (three layers at 1080x1920, p50 13.86 ms), but the Program
+   panel is a `QWidget` and cannot paint a Vulkan texture, so it still reads back
+   — roughly 36 ms per frame at 1080x1920 on top of the render. Embedding the
+   Vulkan `QWindow` with `QWidget::createWindowContainer` and driving it from the
+   transport is what turns a fast engine into playback on screen.
 
 Do **not** start M5 until M4's two blockers above are cleared. The milestone
 ladder is not advisory (see `docs/MISSION.md`).
@@ -63,7 +62,7 @@ ladder is not advisory (see `docs/MISSION.md`).
 | M1 — probe, decode, frame-accurate seek | **Gate met.** 200/200 random seeks correct on a 10-min 4K file. Performance budget **not** met — see D9. |
 | M2 — timeline model + undo/redo | **Gate met.** 10,000-operation fuzz, undo returns byte-identical. |
 | M3 — GPU compositor + playback | **Gate met** 2026-08-05. 1800 frames presented, 0 dropped, p99 36.67 ms, confirmed visually by the project owner. See the caveats in `PROGRESS.md`. |
-| M4 — panels, docking, workspaces, JKL | **Iteration 14, on `m4-qt-panels`. Gate met mechanically on Windows** — the full trim set driven by `QTest::keyClick` on a real panel, plus JKL, a Tools strip, mouse editing and a working render path (ADR 009–019). **Not confirmed by CI** and **not signed off by the owner**. The Program panel shows the picture at the playhead; it does not sustain playback (D30). |
+| M4 — panels, docking, workspaces, JKL | **Iteration 15, on `m4-qt-panels`. Gate met mechanically on Windows** — the full trim set driven by `QTest::keyClick` on a real panel, plus JKL, a Tools strip, mouse editing and a working render path (ADR 009–019). **Not confirmed by CI** and **not signed off by the owner**. The Program panel shows the picture at the playhead; it does not sustain playback (D30). |
 | M5 onward | Not started. |
 
 Zero warnings at `/W4 /WX` and `-Wall -Wextra -Werror`.
@@ -78,8 +77,8 @@ fact. Get the number from the suite:
 ctest --preset windows-debug
 ```
 
-At M4 iteration 14 (2026-08-06, on `m4-qt-panels`) that was **518**: core 48,
-media 92, timeline 141, edit 63, gpu 42, playback 40, render 11, app 81. Treat it
+At M4 iteration 15 (2026-08-06, on `m4-qt-panels`) that was **521**: core 48,
+media 92, timeline 141, edit 63, gpu 42, playback 40, render 14, app 81. Treat it
 as a dated snapshot, not a claim about now.
 
 **Windows Smart App Control blocks freshly linked binaries on this machine.**
@@ -95,7 +94,7 @@ was a tooling mistake, not a property of the source. ADR 016 has the transcribed
 table; go back to the page for anything it does not cover.
 
 **Two things block calling M4 done, and neither is code.** CI has never run
-against iterations 4–14 (see the top of this file). And the project owner has not
+against iterations 4–15 (see the top of this file). And the project owner has not
 signed off on the panel; its painting has no oracle (D23), exactly as
 presentation has none (ADR 008), so a person has to look at it — M3's gate needed
 the same.
@@ -147,8 +146,13 @@ reached the project owner before this existed.
 Reports the per-frame cost **and how many frames the decoders materialised** --
 the counter is the important half, because it distinguishes "this is expensive"
 from "this is seeking back to a keyframe every frame". On the reference machine
-at 1080x1920, one layer: device-resident p50 29.76 ms, readback p50 66.20 ms,
-budget 33.33 (ADR 019). Neither sustains 30 fps yet; D33 has the measured reason.
+at 1080x1920: one layer p50 4.67 ms, three layers p50 13.86 ms, budget 33.33 --
+M3's own gate workload with 2.4x of headroom (ADR 019).
+
+**The counters lie about seeking, and that cost two iterations.**
+`frames_materialised` and `frames_decoded` both read a healthy 1.0 per frame
+while `seek_to_frame` was eating 23.5 of every 29.2 ms. Use `--breakdown` to time
+the stages, and `seeks()` for the seek question specifically.
 
 ### Seeing a timeline frame render
 
