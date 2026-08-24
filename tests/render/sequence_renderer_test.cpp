@@ -20,6 +20,7 @@ using rf::Errc;
 using rf::gpu::Device;
 using rf::gpu::ImageRgba8;
 using rf::gpu::Instance;
+namespace gpu = rf::gpu;
 using rf::media::Rational;
 using rf::render::SequenceRenderer;
 using rf::timeline::Document;
@@ -185,6 +186,59 @@ TEST_F(RendererTest, RefusesASourceThatIsNotTheSequenceSize) {
 TEST_F(RendererTest, RefusesANonsenseSequenceSize) {
     EXPECT_TRUE(SequenceRenderer::create(*device_, 0, 240).has_error());
     EXPECT_TRUE(SequenceRenderer::create(*device_, 320, -1).has_error());
+}
+
+TEST_F(RendererTest, TheDeviceResidentPathAndTheReadbackPathAgree) {
+    // `render()` is implemented on top of `render_to_texture()`, the arrangement
+    // M3 settled on for `composite_into` and `composite`: the picture a monitor
+    // presents and the picture an export writes cannot disagree, because there
+    // is only one of them.
+    SequenceRenderer renderer = make_renderer();
+    const Document document = one_clip();
+
+    const auto texture = renderer.render_to_texture(document, 9);
+    ASSERT_TRUE(texture.has_value()) << texture.error().to_string();
+    const auto from_texture = texture.value()->read_back();
+    ASSERT_TRUE(from_texture.has_value());
+
+    const auto from_render = renderer.render(document, 9);
+    ASSERT_TRUE(from_render.has_value()) << from_render.error().to_string();
+    EXPECT_EQ(from_texture.value().pixels, from_render.value().pixels);
+}
+
+TEST_F(RendererTest, ReusesItsTexturesRatherThanAllocatingPerFrame) {
+    // A device allocation on the playback path is what the mission's budget
+    // forbids outright ("render thread allocations per frame: 0"). Measured by
+    // proxy: the same target texture comes back every time.
+    SequenceRenderer renderer = make_renderer();
+    const Document document = one_clip();
+
+    const auto first = renderer.render_to_texture(document, 0);
+    ASSERT_TRUE(first.has_value());
+    const gpu::Texture* address = first.value();
+
+    for (const std::int64_t frame : {1, 2, 3}) {
+        const auto again = renderer.render_to_texture(document, frame);
+        ASSERT_TRUE(again.has_value()) << again.error().to_string();
+        EXPECT_EQ(again.value(), address) << "frame " << frame << " built a new target";
+    }
+}
+
+TEST_F(RendererTest, DecodesExactlyOneFrameWhenPlayingForward) {
+    // A counter, not a stopwatch (M1's rule). Rendering consecutive frames must
+    // decode one frame each; if it seeked back to a keyframe every time, this
+    // would read in the hundreds and playback would be impossible for a reason
+    // no timing test would explain.
+    SequenceRenderer renderer = make_renderer();
+    const Document document = one_clip();
+    ASSERT_TRUE(renderer.render_to_texture(document, 0).has_value());
+
+    const std::int64_t before = renderer.frames_materialised();
+    for (std::int64_t frame = 1; frame <= 10; ++frame) {
+        ASSERT_TRUE(renderer.render_to_texture(document, frame).has_value());
+    }
+    EXPECT_EQ(renderer.frames_materialised() - before, 10)
+        << "ten consecutive frames must cost ten decodes";
 }
 
 }  // namespace

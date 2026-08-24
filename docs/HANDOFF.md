@@ -10,7 +10,7 @@ Repository: https://github.com/wdajon/Video-Editing-App (public)
 
 ## READ THIS FIRST: most of M4 is not on `main`
 
-`main` is at **M4 iteration 3**. Ten further commits live on branches, none
+`main` is at **M4 iteration 3**. Eleven further commits live on branches, none
 merged, because **GitHub Actions has been in a major outage since 2026-08-06
 15:22 UTC** and nothing has been verified on anything but MSVC.
 
@@ -18,13 +18,13 @@ merged, because **GitHub Actions has been in a major outage since 2026-08-06
 |---|---|---|
 | `main` | through M4 i3 (linked clips) | last CI-verified point |
 | `m4-command-map` | i4 — the command map | **PR #4 open**, CI never ran |
-| `m4-qt-panels` | i5–i13 — panels, workspaces, JKL, mouse, Adobe bindings, Tools strip, the render path, the Program panel | stacked on `m4-command-map`, **no PR** |
+| `m4-qt-panels` | i5–i14 — panels, workspaces, JKL, mouse, Adobe bindings, Tools strip, the render path, the Program panel, the device-resident preview | stacked on `m4-command-map`, **no PR** |
 
 ```powershell
 git checkout m4-qt-panels   # everything described below lives here
 ```
 
-**Do not merge either branch until CI is green on it.** Iterations 4–13 have
+**Do not merge either branch until CI is green on it.** Iterations 4–14 have
 never been compiled by GCC or Clang and have never run under ASan, UBSan or
 TSan; every earlier milestone leaned on those jobs. Check with:
 
@@ -38,16 +38,17 @@ so the stack lands in order.
 
 ### What to do first
 
-1. **Check whether CI has recovered** and, if so, get iterations 4–13 through it.
+1. **Check whether CI has recovered** and, if so, get iterations 4–14 through it.
    Nothing should merge before that.
 2. **Ask the project owner to run `--demo-timeline`** and say whether the panel
    behaves. M4 cannot be called done without it, the same way M3 could not.
-3. **Then the rest of D30 — playback in the monitor.** The Program panel shows
-   the picture at the playhead and follows scrubs, steps and edits, but it reads
-   pixels back per frame (p50 49.9 ms at 1080x1920 with three layers, D13), so
-   it cannot sustain playback at a real sequence size. The Vulkan `QWindow` path
-   already exists and presents under FIFO; routing the panel through it is what
-   remains.
+3. **Then D33 — YUV to RGBA in the shader.** Measured, not guessed: with the
+   readback removed the preview renders 1080x1920 at p50 29.76 ms / p99 43.53 ms
+   against a 33.33 ms budget (ADR 019). What is left is decode plus a CPU
+   swscale pass plus an 8.3 MB upload of converted RGBA. Uploading the Y, U and V
+   planes and doing the matrix in the shader moves ~3.1 MB instead and removes
+   the swscale pass — it attacks both remaining costs at once. **D30** (presenting
+   through the swapchain so a `QWidget` need not read back at all) follows.
 
 Do **not** start M5 until M4's two blockers above are cleared. The milestone
 ladder is not advisory (see `docs/MISSION.md`).
@@ -62,7 +63,7 @@ ladder is not advisory (see `docs/MISSION.md`).
 | M1 — probe, decode, frame-accurate seek | **Gate met.** 200/200 random seeks correct on a 10-min 4K file. Performance budget **not** met — see D9. |
 | M2 — timeline model + undo/redo | **Gate met.** 10,000-operation fuzz, undo returns byte-identical. |
 | M3 — GPU compositor + playback | **Gate met** 2026-08-05. 1800 frames presented, 0 dropped, p99 36.67 ms, confirmed visually by the project owner. See the caveats in `PROGRESS.md`. |
-| M4 — panels, docking, workspaces, JKL | **Iteration 13, on `m4-qt-panels`. Gate met mechanically on Windows** — the full trim set driven by `QTest::keyClick` on a real panel, plus JKL, a Tools strip, mouse editing and a working render path (ADR 009–018). **Not confirmed by CI** and **not signed off by the owner**. The Program panel shows the picture at the playhead; it does not sustain playback (D30). |
+| M4 — panels, docking, workspaces, JKL | **Iteration 14, on `m4-qt-panels`. Gate met mechanically on Windows** — the full trim set driven by `QTest::keyClick` on a real panel, plus JKL, a Tools strip, mouse editing and a working render path (ADR 009–019). **Not confirmed by CI** and **not signed off by the owner**. The Program panel shows the picture at the playhead; it does not sustain playback (D30). |
 | M5 onward | Not started. |
 
 Zero warnings at `/W4 /WX` and `-Wall -Wextra -Werror`.
@@ -77,9 +78,16 @@ fact. Get the number from the suite:
 ctest --preset windows-debug
 ```
 
-At M4 iteration 13 (2026-08-06, on `m4-qt-panels`) that was **515**: core 48,
-media 92, timeline 141, edit 63, gpu 42, playback 40, render 8, app 81. Treat it
+At M4 iteration 14 (2026-08-06, on `m4-qt-panels`) that was **518**: core 48,
+media 92, timeline 141, edit 63, gpu 42, playback 40, render 11, app 81. Treat it
 as a dated snapshot, not a claim about now.
+
+**Windows Smart App Control blocks freshly linked binaries on this machine.**
+Symptom: `ctest` fails at discovery with *"Error running test executable ...
+Result: unknown error"*, and running the binary directly reports *"An Application
+Control policy has blocked this file"*. It is not a code fault and not a bad
+link. A targeted relink does **not** clear it; deleting the build directory and
+rebuilding does. Seen twice, on both configurations.
 
 **Adobe's shortcut page is readable — through the browser tool, not `WebFetch`,
 which times out on it.** Two sessions' worth of "the page could not be fetched"
@@ -87,7 +95,7 @@ was a tooling mistake, not a property of the source. ADR 016 has the transcribed
 table; go back to the page for anything it does not cover.
 
 **Two things block calling M4 done, and neither is code.** CI has never run
-against iterations 4–13 (see the top of this file). And the project owner has not
+against iterations 4–14 (see the top of this file). And the project owner has not
 signed off on the panel; its painting has no oracle (D23), exactly as
 presentation has none (ADR 008), so a person has to look at it — M3's gate needed
 the same.
@@ -128,6 +136,19 @@ $env:QT_QPA_PLATFORM='offscreen'
 
 No test can see that a panel has covered the application; two such defects
 reached the project owner before this existed.
+
+### Measuring the preview
+
+```powershell
+.\build\windows-release\bin\rf_render_bench.exe --source <file> --frames 120
+.\build\windows-release\bin\rf_render_bench.exe --source <file> --frames 120 --readback
+```
+
+Reports the per-frame cost **and how many frames the decoders materialised** --
+the counter is the important half, because it distinguishes "this is expensive"
+from "this is seeking back to a keyframe every frame". On the reference machine
+at 1080x1920, one layer: device-resident p50 29.76 ms, readback p50 66.20 ms,
+budget 33.33 (ADR 019). Neither sustains 30 fps yet; D33 has the measured reason.
 
 ### Seeing a timeline frame render
 

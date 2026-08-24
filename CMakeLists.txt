@@ -90,6 +90,7 @@ add_subdirectory(src/edit)
 add_subdirectory(src/render)
 add_subdirectory(tools/rf_gpu_info)
 add_subdirectory(tools/rf_playback_bench)
+add_subdirectory(tools/rf_render_bench)
 add_subdirectory(tools/rf_seek_check)
 add_subdirectory(tools/rf_version)
 

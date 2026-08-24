@@ -595,6 +595,55 @@ aspect ratio would misrepresent the one thing it exists to show), and it skips
 re-rendering a frame already showing, so a drag costs one decode rather than one
 per mouse move.
 
+### Iteration 14 — measure, then fix, then measure again
+
+I told the project owner the preview could not play because of the readback. That
+was a guess dressed as a diagnosis, and this project's own rule is that every
+performance guess made here has been wrong by at least 4x. So `rf_render_bench`
+was written first, and it reports the per-frame cost **and how many frames the
+decoders materialised** -- a counter, not a stopwatch, for the reason M1 recorded.
+
+**The counter caught my second guess before it cost anything.** Seeing
+`render()` seek for every frame, I assumed each call re-decoded from a keyframe:
+
+```
+decoded  120 frames for 120 rendered (1.0 per frame, floor 1)
+```
+
+Exactly the floor. M1's decoder already recognises the sequential case. One run
+settled what timing alone would have left ambiguous.
+
+So the transfers really were the cost. `render_to_texture()` composites into a
+texture the renderer owns and returns it, with nothing crossing PCIe outbound;
+`render()` reads that back, so the two cannot disagree about what a frame is --
+the arrangement M3 settled on for `composite_into` and `composite`.
+
+Reference machine, 1080x1920, one layer, 120 frames:
+
+| path | p50 | p99 | budget |
+|---|---|---|---|
+| readback | 66.20 ms | 80.94 ms | 33.33 |
+| device-resident | **29.76 ms** | 43.53 ms | 33.33 |
+
+**A 2.2x improvement, and not enough.** p50 is inside the budget, p99 is 30%
+over. Reported as a partial result because it is one. The remaining ~30 ms is
+decode plus a CPU swscale YUV→RGBA pass plus an 8.3 MB upload of the converted
+RGBA. The fix is the one M3 already wrote down as its third caveat -- upload the
+Y, U and V planes and do the matrix in the shader, moving ~3.1 MB instead and
+removing swscale entirely. Filed as D33 with the numbers against it rather than
+half-started.
+
+At 320x240 the preview measures p50 2.92 ms, so the demo plays smoothly today.
+
+```
+100% tests passed, 0 tests failed out of 518     (windows-debug, clean tree)
+100% tests passed, 0 tests failed out of 518     (windows-release)
+```
+
+Layer textures are created once and reused; a test asserts the same target comes
+back on every call, because a device allocation per frame is what the mission's
+budget forbids outright.
+
 ### Next action
 
 There is a picture, and playback is still the gap: pressing `L` sweeps the
