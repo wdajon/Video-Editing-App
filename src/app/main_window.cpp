@@ -103,12 +103,19 @@ MainWindow::MainWindow(QWidget* parent)
     // The picture at the playhead. It renders on demand rather than presenting
     // continuously, so it follows a scrub and a step but does not play -- see
     // the header for why that trade was made and what replaces it (D30).
-    program_dock_ = new QDockWidget(tr("Program"), this);
+    program_dock_ = new QDockWidget(this);
     auto* program_dock = program_dock_;
     program_dock->setObjectName("rf_dock_program");
     program_panel_ = new ProgramPanel(document_, this);
     program_dock->setWidget(program_panel_);
     addDockWidget(Qt::RightDockWidgetArea, program_dock);
+
+    // The route changes twice on a machine that can present -- readback for the
+    // first frame, then the swapchain once the surface is exposed -- so the
+    // title follows the signal rather than being read once and left.
+    connect(program_panel_, &ProgramPanel::path_changed, this,
+            [this] { refresh_program_title(); });
+    refresh_program_title();
 
     // A button performs the action; it does not reimplement it. Both routes end
     // in the same call, so a button and its shortcut cannot come to mean
@@ -121,7 +128,7 @@ MainWindow::MainWindow(QWidget* parent)
         // not moved -- a slip is exactly that, and it is the operation hardest
         // to believe in without seeing it.
         program_panel_->invalidate();
-        program_panel_->show_frame(timeline_panel_->playhead_frame());
+        refresh_program(timeline_panel_->playhead_frame());
     });
 
     connect(timeline_panel_, &TimelinePanel::edit_state_changed, this, [this] {
@@ -138,7 +145,7 @@ MainWindow::MainWindow(QWidget* parent)
         // fighting them on the next tick.
         transport_->seek(wall_clock_.now(), frame);
         timeline_panel_->set_playhead_frame(frame);
-        program_panel_->show_frame(frame);
+        refresh_program(frame);
     });
 
     connect(timeline_panel_, &TimelinePanel::shuttle_changed, this, [this] {
@@ -287,21 +294,41 @@ void MainWindow::refresh_playhead(playback::Nanoseconds now) {
         return;
     }
     timeline_panel_->set_playhead_frame(frame.value());
-    program_panel_->show_frame(frame.value());
-    // The device only exists after a frame has been rendered, and the surface
-    // needs the device -- so this is the first moment it can be built. It is a
-    // no-op once attached, and on a machine that cannot present.
-    program_panel_->attach_surface();
+    refresh_program(frame.value());
+}
 
-    // Which path is live is worth saying: presenting and reading back differ by
-    // about 36 ms a frame at 1080x1920, so "why is this stuttering" has an
-    // answer on screen rather than needing a profiler.
-    if (program_dock_ != nullptr) {
-        const QString title =
-            program_panel_->is_presenting() ? tr("Program") : tr("Program (software preview)");
-        if (program_dock_->windowTitle() != title) {
-            program_dock_->setWindowTitle(title);
-        }
+void MainWindow::refresh_program(std::int64_t frame) {
+    program_panel_->show_frame(frame);
+    // The device only exists once a frame has been rendered, and the surface
+    // needs the device -- so the call has to come after, and it has to come
+    // after *every* refresh rather than after one chosen kind, because any of
+    // them may be the first that renders. A no-op once attached, and on a
+    // machine that cannot present.
+    program_panel_->attach_surface();
+}
+
+void MainWindow::refresh_program_title() {
+    if (program_dock_ == nullptr) {
+        return;
+    }
+    QString title;
+    switch (program_panel_->path()) {
+        case ProgramPanel::Path::presenting:
+            title = tr("Program");
+            break;
+        case ProgramPanel::Path::readback:
+            title = tr("Program (software preview)");
+            break;
+        case ProgramPanel::Path::unknown:
+            // Not "Program": that is the word for presenting, and a panel that
+            // has not rendered anything must not borrow it. Reading the title
+            // is the only check anyone has for D30, so the untried state has to
+            // look different from the passing one.
+            title = tr("Program (no picture)");
+            break;
+    }
+    if (program_dock_->windowTitle() != title) {
+        program_dock_->setWindowTitle(title);
     }
 }
 

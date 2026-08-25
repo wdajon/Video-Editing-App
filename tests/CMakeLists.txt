@@ -151,10 +151,16 @@ if(RF_BUILD_APP)
         app/demo_timeline_test.cpp
         app/key_translation_test.cpp
         app/main_window_test.cpp
+        app/program_panel_test.cpp
         app/timeline_panel_test.cpp
         app/tool_palette_test.cpp
         app/transport_test.cpp
         app/window_title_test.cpp)
+
+    # The Program panel renders real media, so its tests need the fixture the
+    # same way rf_media_tests and rf_render_tests do.
+    target_compile_definitions(rf_app_tests
+        PRIVATE RF_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures")
 
     # No gtest_main: widgets need a QApplication, which app/main.cpp owns.
     #
