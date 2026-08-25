@@ -141,9 +141,24 @@ ProgramPanel::ProgramPanel(timeline::Document& document, QWidget* parent)
 }
 
 void ProgramPanel::attach_surface() {
-    if (surface_ != nullptr || impl_->instance() == nullptr || impl_->device() == nullptr) {
+    if (surface_ != nullptr) {
         return;
     }
+    if (attempts_ > 0) {
+        // Asked once, told no. Both ways `initialise` can fail are settled for
+        // the life of the process -- an instance with no surface support, or a
+        // Qt instance that will not adopt this VkInstance -- so asking again
+        // would build and destroy a QWindow on every scrub to hear the same
+        // answer. This is now on the per-frame path, so that would be paid over
+        // and over on exactly the machines that can least afford it.
+        return;
+    }
+    if (impl_->instance() == nullptr || impl_->device() == nullptr) {
+        // No device yet, so nothing has been asked. Deliberately not counted:
+        // this is "too early", not "refused".
+        return;
+    }
+    ++attempts_;
     auto surface = std::make_unique<ProgramSurface>(*impl_->instance(), *impl_->device());
     if (Result<void> started = surface->initialise(); !started) {
         // No presentation here. The readback path already works, so putting this
@@ -154,7 +169,6 @@ void ProgramPanel::attach_surface() {
         refusal_ = QString::fromStdString(started.error().message());
         return;
     }
-    refusal_.clear();
     surface_ = surface.release();
     container_ = QWidget::createWindowContainer(surface_, this);
     container_->setFocusPolicy(Qt::NoFocus);  // the Timeline keeps the keyboard
