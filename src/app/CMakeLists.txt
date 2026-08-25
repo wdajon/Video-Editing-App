@@ -6,6 +6,7 @@ add_library(rf_app STATIC
     main_window.cpp
     program_monitor.cpp
     program_panel.cpp
+    program_surface.cpp
     timeline_panel.cpp
     tool_palette.cpp
     transport.cpp
@@ -15,6 +16,7 @@ add_library(rf_app STATIC
     "${PROJECT_SOURCE_DIR}/include/rf/app/main_window.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/app/program_monitor.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/app/program_panel.hpp"
+    "${PROJECT_SOURCE_DIR}/include/rf/app/program_surface.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/app/timeline_panel.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/app/tool_palette.hpp"
     "${PROJECT_SOURCE_DIR}/include/rf/app/transport.hpp"

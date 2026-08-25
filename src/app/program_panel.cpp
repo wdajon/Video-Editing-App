@@ -1,12 +1,14 @@
 #include "rf/app/program_panel.hpp"
 
 #include <QPainter>
+#include <QVBoxLayout>
 #include <QPaintEvent>
 
 #include <optional>
 #include <string>
 #include <utility>
 
+#include "rf/app/program_surface.hpp"
 #include "rf/gpu/device.hpp"
 #include "rf/gpu/instance.hpp"
 #include "rf/media/media_info.hpp"
@@ -54,10 +56,16 @@ public:
         }
 
         if (!device_) {
-            // No presentation: this reads pixels back rather than owning a
-            // surface, so asking for one would fail on a machine that can render
-            // perfectly well (ADR 008).
-            Result<gpu::Instance> instance = gpu::Instance::create(gpu::Instance::Options{});
+            // Ask for presentation, but do not require it. Presenting is about
+            // 36 ms per frame cheaper than reading back at 1080x1920; a machine
+            // that cannot present still renders perfectly well (ADR 008), and
+            // the panel falls back to painting.
+            gpu::Instance::Options wanted;
+            wanted.enable_presentation = true;
+            Result<gpu::Instance> instance = gpu::Instance::create(wanted);
+            if (!instance) {
+                instance = gpu::Instance::create(gpu::Instance::Options{});
+            }
             if (!instance) {
                 return instance.error();
             }
@@ -83,11 +91,39 @@ public:
         return ok();
     }
 
-    [[nodiscard]] Result<gpu::ImageRgba8> render(std::int64_t frame) {
+    [[nodiscard]] Result<std::optional<gpu::ImageRgba8>> render(std::int64_t frame) {
         if (Result<void> ready_now = ensure_renderer(frame); !ready_now) {
             return ready_now.error();
         }
-        return renderer_->render(document_, frame);
+        Result<const gpu::Texture*> texture = renderer_->render_to_texture(document_, frame);
+        if (!texture) {
+            return texture.error();
+        }
+
+        if (surface_ != nullptr && surface_->ready()) {
+            // const_cast is confined to here. render_to_texture hands back a
+            // const view because callers must not keep or mutate the target,
+            // and presenting needs a non-const reference to blit from; widening
+            // the return type would let every caller do more than present.
+            auto& presentable = const_cast<gpu::Texture&>(*texture.value());
+            if (Result<void> shown = surface_->present(presentable); !shown) {
+                return shown.error();
+            }
+            return std::optional<gpu::ImageRgba8>{};
+        }
+
+        Result<gpu::ImageRgba8> pixels = texture.value()->read_back();
+        if (!pixels) {
+            return pixels.error();
+        }
+        return std::optional<gpu::ImageRgba8>{std::move(pixels).value()};
+    }
+
+    [[nodiscard]] gpu::Instance* instance() const noexcept { return instance_.get(); }
+    [[nodiscard]] gpu::Device* device() const noexcept { return device_.get(); }
+    void adopt_surface(ProgramSurface* surface) noexcept { surface_ = surface; }
+    [[nodiscard]] bool presenting() const noexcept {
+        return surface_ != nullptr && surface_->ready();
     }
 
 private:
@@ -95,6 +131,7 @@ private:
     std::unique_ptr<gpu::Instance> instance_;
     std::unique_ptr<gpu::Device> device_;
     std::optional<render::SequenceRenderer> renderer_;
+    ProgramSurface* surface_ = nullptr;  // owned by the panel, not by this
 };
 
 ProgramPanel::ProgramPanel(timeline::Document& document, QWidget* parent)
@@ -102,6 +139,39 @@ ProgramPanel::ProgramPanel(timeline::Document& document, QWidget* parent)
     setObjectName("rf_panel_program");
     setMinimumSize(160, 120);
     setAutoFillBackground(true);
+    layout_ = new QVBoxLayout(this);
+    layout_->setContentsMargins(0, 0, 0, 0);
+}
+
+bool ProgramPanel::is_presenting() const noexcept {
+    return impl_->presenting();
+}
+
+void ProgramPanel::attach_surface() {
+    if (surface_ != nullptr || impl_->instance() == nullptr || impl_->device() == nullptr) {
+        return;
+    }
+    auto surface = std::make_unique<ProgramSurface>(*impl_->instance(), *impl_->device());
+    if (Result<void> started = surface->initialise(); !started) {
+        // No presentation here. The readback path already works, so saying this
+        // in the status line would be noise: the user sees a picture either way,
+        // it is only slower.
+        return;
+    }
+    surface_ = surface.release();
+    container_ = QWidget::createWindowContainer(surface_, this);
+    container_->setFocusPolicy(Qt::NoFocus);  // the Timeline keeps the keyboard
+    layout_->addWidget(container_);
+    impl_->adopt_surface(surface_);
+
+    // The swapchain exists only once the window is exposed, so the frame already
+    // showing has to be pushed again afterwards or the panel stays black until
+    // the playhead next moves.
+    connect(surface_, &ProgramSurface::became_ready, this, [this] {
+        const std::int64_t showing = frame_;
+        frame_ = -1;
+        show_frame(showing);
+    });
 }
 
 ProgramPanel::~ProgramPanel() = default;
@@ -118,7 +188,13 @@ void ProgramPanel::show_frame(std::int64_t frame) {
     }
     frame_ = frame;
 
-    Result<gpu::ImageRgba8> image = impl_->render(frame);
+    Result<std::optional<gpu::ImageRgba8>> image = impl_->render(frame);
+    if (image && !image.value()) {
+        // Presented straight to the screen; there is nothing to paint.
+        status_.clear();
+        picture_ = QImage{};
+        return;
+    }
     if (!image) {
         // Said out loud rather than shown as black: a monitor that goes dark
         // without explaining itself is indistinguishable from a broken one.
@@ -129,10 +205,11 @@ void ProgramPanel::show_frame(std::int64_t frame) {
     }
 
     status_.clear();
+    const gpu::ImageRgba8& pixels = *image.value();
     // Copied, because the QImage would otherwise reference pixels owned by a
     // temporary that dies at the end of this statement.
-    picture_ = QImage(image.value().pixels.data(), image.value().width, image.value().height,
-                      image.value().width * 4, QImage::Format_RGBA8888)
+    picture_ = QImage(pixels.pixels.data(), pixels.width, pixels.height, pixels.width * 4,
+                      QImage::Format_RGBA8888)
                    .copy();
     update();
 }

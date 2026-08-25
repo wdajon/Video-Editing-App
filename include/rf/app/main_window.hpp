@@ -20,6 +20,7 @@
 
 class QAction;
 class QLabel;
+class QDockWidget;
 class QMenu;
 
 namespace rf::app {
@@ -106,6 +107,7 @@ private:
     TimelinePanel* timeline_panel_ = nullptr;
     ToolPalette* tool_palette_ = nullptr;
     ProgramPanel* program_panel_ = nullptr;
+    QDockWidget* program_dock_ = nullptr;
     QLabel* state_label_ = nullptr;
     QHash<int, QAction*> command_actions_;
     /// By pointer because Transport has no default constructor -- it is built

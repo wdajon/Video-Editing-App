@@ -10,7 +10,7 @@ Repository: https://github.com/wdajon/Video-Editing-App (public)
 
 ## READ THIS FIRST: most of M4 is not on `main`
 
-`main` is at **M4 iteration 3**. Twelve further commits live on branches, none
+`main` is at **M4 iteration 3**. Thirteen further commits live on branches, none
 merged, because **GitHub Actions has been in a major outage since 2026-08-06
 15:22 UTC** and nothing has been verified on anything but MSVC.
 
@@ -18,13 +18,13 @@ merged, because **GitHub Actions has been in a major outage since 2026-08-06
 |---|---|---|
 | `main` | through M4 i3 (linked clips) | last CI-verified point |
 | `m4-command-map` | i4 — the command map | **PR #4 open**, CI never ran |
-| `m4-qt-panels` | i5–i15 — panels, workspaces, JKL, mouse, Adobe bindings, Tools strip, the render path, the Program panel, the device-resident preview, seek-free playback | stacked on `m4-command-map`, **no PR** |
+| `m4-qt-panels` | i5–i16 — panels, workspaces, JKL, mouse, Adobe bindings, Tools strip, the render path, the Program panel, the device-resident preview, seek-free playback, the presenting surface | stacked on `m4-command-map`, **no PR** |
 
 ```powershell
 git checkout m4-qt-panels   # everything described below lives here
 ```
 
-**Do not merge either branch until CI is green on it.** Iterations 4–15 have
+**Do not merge either branch until CI is green on it.** Iterations 4–16 have
 never been compiled by GCC or Clang and have never run under ASan, UBSan or
 TSan; every earlier milestone leaned on those jobs. Check with:
 
@@ -38,16 +38,16 @@ so the stack lands in order.
 
 ### What to do first
 
-1. **Check whether CI has recovered** and, if so, get iterations 4–15 through it.
+1. **Check whether CI has recovered** and, if so, get iterations 4–16 through it.
    Nothing should merge before that.
 2. **Ask the project owner to run `--demo-timeline`** and say whether the panel
    behaves. M4 cannot be called done without it, the same way M3 could not.
-3. **Then D30 — present through the swapchain.** The render engine now sustains
-   M3's gate workload (three layers at 1080x1920, p50 13.86 ms), but the Program
-   panel is a `QWidget` and cannot paint a Vulkan texture, so it still reads back
-   — roughly 36 ms per frame at 1080x1920 on top of the render. Embedding the
-   Vulkan `QWindow` with `QWidget::createWindowContainer` and driving it from the
-   transport is what turns a fast engine into playback on screen.
+3. **Confirm the presenting path actually presents (D30).** It is implemented
+   and nothing has verified it: the offscreen platform cannot make a Vulkan
+   surface, and Smart App Control blocks the app test binary here (D34). Launch
+   `--demo-timeline` on a real display and look at the Program dock's title — it
+   says **"Program (software preview)"** when it fell back to the readback, and
+   plain **"Program"** when it is presenting.
 
 Do **not** start M5 until M4's two blockers above are cleared. The milestone
 ladder is not advisory (see `docs/MISSION.md`).
@@ -62,7 +62,7 @@ ladder is not advisory (see `docs/MISSION.md`).
 | M1 — probe, decode, frame-accurate seek | **Gate met.** 200/200 random seeks correct on a 10-min 4K file. Performance budget **not** met — see D9. |
 | M2 — timeline model + undo/redo | **Gate met.** 10,000-operation fuzz, undo returns byte-identical. |
 | M3 — GPU compositor + playback | **Gate met** 2026-08-05. 1800 frames presented, 0 dropped, p99 36.67 ms, confirmed visually by the project owner. See the caveats in `PROGRESS.md`. |
-| M4 — panels, docking, workspaces, JKL | **Iteration 15, on `m4-qt-panels`. Gate met mechanically on Windows** — the full trim set driven by `QTest::keyClick` on a real panel, plus JKL, a Tools strip, mouse editing and a working render path (ADR 009–019). **Not confirmed by CI** and **not signed off by the owner**. The Program panel shows the picture at the playhead; it does not sustain playback (D30). |
+| M4 — panels, docking, workspaces, JKL | **Iteration 16, on `m4-qt-panels`. Gate met mechanically on Windows** — the full trim set driven by `QTest::keyClick` on a real panel, plus JKL, a Tools strip, mouse editing and a working render path (ADR 009–019). **Not confirmed by CI** and **not signed off by the owner**. The Program panel presents through the swapchain where it can, and falls back to a readback where it cannot — the presenting path is **unverified** (D30, D34). |
 | M5 onward | Not started. |
 
 Zero warnings at `/W4 /WX` and `-Wall -Wextra -Werror`.
@@ -77,16 +77,28 @@ fact. Get the number from the suite:
 ctest --preset windows-debug
 ```
 
-At M4 iteration 15 (2026-08-06, on `m4-qt-panels`) that was **521**: core 48,
-media 92, timeline 141, edit 63, gpu 42, playback 40, render 14, app 81. Treat it
+At M4 iteration 16 (2026-08-06, on `m4-qt-panels`) **440 of 521 could run**:
+core 48, media 92, timeline 141, edit 63, gpu 42, playback 40, render 14 — all
+passing. The 81 app tests were blocked by Smart App Control (D34), not failing. Treat it
 as a dated snapshot, not a claim about now.
 
-**Windows Smart App Control blocks freshly linked binaries on this machine.**
-Symptom: `ctest` fails at discovery with *"Error running test executable ...
-Result: unknown error"*, and running the binary directly reports *"An Application
-Control policy has blocked this file"*. It is not a code fault and not a bad
-link. A targeted relink does **not** clear it; deleting the build directory and
-rebuilding does. Seen twice, on both configurations.
+**Windows Smart App Control blocks binaries on this machine, and as of M4 i16 it
+blocks `rf_app_tests.exe` outright (D34).** Symptom: `ctest` fails at discovery
+with *"Error running test executable ... Result: unknown error"*; run the binary
+directly and it says *"An Application Control policy has blocked this file"*.
+Enforcement is on (`VerifiedAndReputablePolicyState = 1` under
+`HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy`).
+
+It is not a build fault: every other suite passes, `reelforge.exe` itself runs,
+and a copy of the blocked binary at another path is blocked too — so the
+judgement is on content, not location. Deleting the build directory cleared it
+twice and did **not** the third time. **The 81 app tests therefore cannot be run
+here**; run the rest directly and say so, rather than reporting a total that
+quietly excludes them:
+
+```powershell
+foreach ($n in @('rf_core_tests','rf_media_tests','rf_gpu_tests','rf_playback_tests','rf_timeline_tests','rf_edit_tests','rf_render_tests')) { & ".\build\windows-debug\bin\$n.exe" }
+```
 
 **Adobe's shortcut page is readable — through the browser tool, not `WebFetch`,
 which times out on it.** Two sessions' worth of "the page could not be fetched"
@@ -94,7 +106,7 @@ was a tooling mistake, not a property of the source. ADR 016 has the transcribed
 table; go back to the page for anything it does not cover.
 
 **Two things block calling M4 done, and neither is code.** CI has never run
-against iterations 4–15 (see the top of this file). And the project owner has not
+against iterations 4–16 (see the top of this file). And the project owner has not
 signed off on the panel; its painting has no oracle (D23), exactly as
 presentation has none (ADR 008), so a person has to look at it — M3's gate needed
 the same.
