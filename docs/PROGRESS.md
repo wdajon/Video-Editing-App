@@ -17,10 +17,10 @@ All four operations and undo, performed by `QTest::keyClick` on a focused
 `TimelinePanel` inside a real `QMainWindow`, on the offscreen platform. Nothing
 in that test calls the editor, the command map or `make_trim` directly.
 
-**CI is no longer a caveat** (iteration 17). Both branches are green across the
-full six-job matrix, so iterations 4–17 have now been compiled by GCC and Clang
-and run under ASan, UBSan and TSan. Three real defects came out of that, none of
-which MSVC could see; they are in iteration 17 below.
+**CI is no longer a caveat** (iteration 17). Everything is merged to `main` and
+green across the full six-job matrix, so iterations 4–17 have now been compiled
+by GCC and Clang and run under ASan, UBSan and TSan. Three real findings came out
+of that, none of which MSVC could see; they are in iteration 17 below.
 
 **The remaining caveat is not a formality. Nobody has looked at it.** The panel's
 painting has no oracle (D23) — the tests prove it does not crash and that it
@@ -903,8 +903,11 @@ completed  success  M4 i5-i16: panels, JKL, ... the Program monitor  PR #5  23m1
 ```
 
 Iterations 4–17 had never been compiled by GCC or Clang, and had never run under
-a sanitiser. They have now. Nothing is merged yet: `m4-command-map` goes first so
-the stack lands in order.
+a sanitiser. They have now, and both landed the same day: `m4-command-map` first,
+then `m4-qt-panels` rebased onto it — the rebase dropped the command-map commit
+as already applied and changed no content, which was checked (`git diff` against
+the head CI had verified came back empty) rather than assumed. `main` is at M4
+i17 and green.
 
 Worth recording about the process rather than the code: **each Linux failure was
 hiding the next.** Ninja stops at the first error, so the run that found the
@@ -914,13 +917,10 @@ each. A green Linux job is the only evidence that there is not a fourth.
 
 ### Next action
 
-Two things remain before M4 can be called done, and neither has changed shape:
-
-1. **CI green on the whole stack**, and the merge in order — `m4-command-map`
-   first, then `m4-qt-panels`.
-2. **The project owner looking at it.** That is now a smaller question than it
-   was: the presenting branch is known to execute, so what is left is whether
-   the picture and the panel are usable (D23). `--demo-timeline` exists for it.
+**One thing remains before M4 can be called done: the project owner looking at
+it.** That is a smaller question than it was — the presenting branch is known to
+execute, so what is left is whether the picture and the panel are usable (D23).
+`--demo-timeline` exists for exactly that.
 
 After that, D30's remaining half is sustained playback: the monitor renders one
 frame per scrub and decodes per frame, so pressing `L` still sweeps a playhead
