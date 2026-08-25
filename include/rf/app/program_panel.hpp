@@ -1,17 +1,20 @@
 // The Program monitor: the picture at the playhead.
 //
-// A plain QWidget that paints the frame `rf_render` produces, not the Vulkan
-// `QWindow` of ADR 008. That is a deliberate trade and it is not the end state:
+// Two routes to the screen, and the panel picks whichever this machine can do:
 //
-//   * This works with no surface, so it runs on the offscreen platform, is
-//     testable on a CI runner, and shows a picture on any machine with a device.
-//   * It reads pixels back from the GPU for every frame, which M3 measured at
-//     p50 49.9 ms for 1080x1920 with three layers (D13). Fine for scrubbing and
-//     stepping; **it will not sustain playback at a real sequence size.**
+//   * **Presenting.** A `ProgramSurface` -- the Vulkan `QWindow` of ADR 008 --
+//     blits the composited texture into a swapchain image, embedded here with
+//     `QWidget::createWindowContainer`.
+//   * **Readback.** With no surface, the panel reads pixels off the device and
+//     paints them itself. That works on the offscreen platform, so it is the
+//     one a CI runner exercises, and it costs about 36 ms a frame more at
+//     1080x1920 (D13): fine for scrubbing and stepping, **not enough to sustain
+//     playback at a real sequence size.**
 //
-// The Vulkan path already exists and already presents under FIFO. Routing it
-// through here is the rest of D30. Getting a picture into the window first is
-// worth more than getting the fast one there eventually.
+// `path()` says which one is live, and the difference is loud enough that the
+// Program dock puts it in its title. Note the third state: until a frame has
+// rendered, neither route is live and the honest answer is `unknown` rather
+// than a guess in either direction.
 
 #ifndef RF_APP_PROGRAM_PANEL_HPP
 #define RF_APP_PROGRAM_PANEL_HPP
@@ -66,16 +69,56 @@ public:
     /// which is brought up lazily on the first frame with a clip under it.
     ///
     /// Does nothing where presentation is unavailable: the readback path keeps
-    /// working, only slower.
+    /// working, only slower. Cheap to call repeatedly -- it returns immediately
+    /// once a surface exists, which is what lets every refresh call it rather
+    /// than only the one that happens to run first.
     void attach_surface();
 
+    /// Which route the last frame took to the screen.
+    ///
+    /// Three states rather than a bool, because "nothing has rendered yet" is a
+    /// different answer from "rendered, and read back" and the two used to be
+    /// indistinguishable. That mattered: the dock title is the only signal
+    /// anyone has for D30, and a launched-but-untried panel reported the same
+    /// thing as a presenting one.
+    enum class Path {
+        unknown,     ///< Nothing has rendered, so no route is live.
+        presenting,  ///< Blitted into a swapchain image and presented.
+        readback,    ///< Read off the device and painted by this widget.
+    };
+    Q_ENUM(Path)
+
+    [[nodiscard]] Path path() const noexcept { return path_; }
+
+    /// Why presentation is not in use, or empty when it is -- and empty, too,
+    /// when it has not been tried yet.
+    ///
+    /// Recorded rather than shown: a picture appears either way and the dock
+    /// title already names the route. It exists because "never attempted" and
+    /// "attempted and refused" look identical from outside and are very
+    /// different bugs -- the first is what left the swapchain unused in any
+    /// session where nobody pressed a shuttle key.
+    [[nodiscard]] const QString& presentation_refusal() const noexcept { return refusal_; }
+
     /// True when frames go to a swapchain rather than through a readback.
-    [[nodiscard]] bool is_presenting() const noexcept;
+    [[nodiscard]] bool is_presenting() const noexcept { return path_ == Path::presenting; }
+
+signals:
+    /// Emitted when the route changes, which happens twice on a machine that
+    /// can present: once when the first frame is read back, and again when the
+    /// surface is exposed and the swapchain takes over. A caller that only read
+    /// the value once would report the wrong one.
+    void path_changed(Path path);
+
+public:
 
 protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
+    /// Records the route and tells anyone listening when it changes.
+    void set_path(Path taken);
+
     class Impl;
     std::unique_ptr<Impl> impl_;
     ProgramSurface* surface_ = nullptr;
@@ -83,6 +126,8 @@ private:
     QVBoxLayout* layout_ = nullptr;
     QImage picture_;
     QString status_;
+    QString refusal_;
+    Path path_ = Path::unknown;
     std::int64_t frame_ = -1;  ///< -1 so the first show_frame(0) is not a no-op.
 };
 

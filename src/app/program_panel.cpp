@@ -122,9 +122,6 @@ public:
     [[nodiscard]] gpu::Instance* instance() const noexcept { return instance_.get(); }
     [[nodiscard]] gpu::Device* device() const noexcept { return device_.get(); }
     void adopt_surface(ProgramSurface* surface) noexcept { surface_ = surface; }
-    [[nodiscard]] bool presenting() const noexcept {
-        return surface_ != nullptr && surface_->ready();
-    }
 
 private:
     timeline::Document& document_;
@@ -143,21 +140,21 @@ ProgramPanel::ProgramPanel(timeline::Document& document, QWidget* parent)
     layout_->setContentsMargins(0, 0, 0, 0);
 }
 
-bool ProgramPanel::is_presenting() const noexcept {
-    return impl_->presenting();
-}
-
 void ProgramPanel::attach_surface() {
     if (surface_ != nullptr || impl_->instance() == nullptr || impl_->device() == nullptr) {
         return;
     }
     auto surface = std::make_unique<ProgramSurface>(*impl_->instance(), *impl_->device());
     if (Result<void> started = surface->initialise(); !started) {
-        // No presentation here. The readback path already works, so saying this
+        // No presentation here. The readback path already works, so putting this
         // in the status line would be noise: the user sees a picture either way,
-        // it is only slower.
+        // it is only slower. Kept rather than dropped, because a refusal that
+        // was recorded is the only thing that distinguishes this machine from
+        // one where nothing ever asked.
+        refusal_ = QString::fromStdString(started.error().message());
         return;
     }
+    refusal_.clear();
     surface_ = surface.release();
     container_ = QWidget::createWindowContainer(surface_, this);
     container_->setFocusPolicy(Qt::NoFocus);  // the Timeline keeps the keyboard
@@ -193,6 +190,7 @@ void ProgramPanel::show_frame(std::int64_t frame) {
         // Presented straight to the screen; there is nothing to paint.
         status_.clear();
         picture_ = QImage{};
+        set_path(Path::presenting);
         return;
     }
     if (!image) {
@@ -200,6 +198,9 @@ void ProgramPanel::show_frame(std::int64_t frame) {
         // without explaining itself is indistinguishable from a broken one.
         picture_ = QImage{};
         status_ = QString::fromStdString(image.error().message());
+        // Back to `unknown` rather than staying on whatever the last good frame
+        // used: nothing rendered, so nothing is routed anywhere.
+        set_path(Path::unknown);
         update();
         return;
     }
@@ -211,7 +212,16 @@ void ProgramPanel::show_frame(std::int64_t frame) {
     picture_ = QImage(pixels.pixels.data(), pixels.width, pixels.height, pixels.width * 4,
                       QImage::Format_RGBA8888)
                    .copy();
+    set_path(Path::readback);
     update();
+}
+
+void ProgramPanel::set_path(Path taken) {
+    if (path_ == taken) {
+        return;
+    }
+    path_ = taken;
+    emit path_changed(path_);
 }
 
 void ProgramPanel::paintEvent(QPaintEvent* event) {

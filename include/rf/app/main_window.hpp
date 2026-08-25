@@ -8,6 +8,7 @@
 #include <QStringList>
 #include <QTimer>
 
+#include <cstdint>
 #include <memory>
 
 #include "rf/app/transport.hpp"
@@ -96,6 +97,22 @@ public:
 private:
     void refresh_title();
     void refresh_state_label();
+
+    /// Shows `frame` in the Program panel and gives the presenting path a
+    /// chance to come up.
+    ///
+    /// Every route to a new picture goes through here -- a scrub, a step, an
+    /// edit, a shuttle tick -- because `attach_surface` needs a device and the
+    /// device is built lazily by the first render. Hanging it off only one of
+    /// those callers is what left the swapchain unused in any session where
+    /// nobody pressed J, K or L.
+    void refresh_program(std::int64_t frame);
+
+    /// Puts the live route in the Program dock's title, because presenting and
+    /// reading back differ by about 36 ms a frame at 1080x1920 and "why is this
+    /// stuttering" deserves an answer on screen rather than a profiler.
+    void refresh_program_title();
+
     /// Adds a menu entry that performs `action`, labelled with its shortcut read
     /// from the command map.
     void add_command(QMenu* menu, edit::Action action, const QString& text);
