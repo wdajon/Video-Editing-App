@@ -100,9 +100,11 @@ MainWindow::MainWindow(QWidget* parent)
     tools_dock->setWidget(tool_palette_);
     addDockWidget(Qt::LeftDockWidgetArea, tools_dock);
 
-    // The picture at the playhead. It renders on demand rather than presenting
-    // continuously, so it follows a scrub and a step but does not play -- see
-    // the header for why that trade was made and what replaces it (D30).
+    // The picture at the playhead. Rendered on demand -- one frame per scrub,
+    // step or edit -- so it follows the playhead but does not sustain playback
+    // (D30). That is about decoding per frame, not about how the frame reaches
+    // the screen: which of the two routes carries it is `ProgramPanel::Path`,
+    // and the dock title says which one is live.
     program_dock_ = new QDockWidget(this);
     auto* program_dock = program_dock_;
     program_dock->setObjectName("rf_dock_program");

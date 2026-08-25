@@ -100,6 +100,13 @@ public:
     /// session where nobody pressed a shuttle key.
     [[nodiscard]] const QString& presentation_refusal() const noexcept { return refusal_; }
 
+    /// How many times a surface has been asked for. Never more than one: the
+    /// answer cannot change within a process, and `attach_surface` is on the
+    /// per-frame path, so a retry would cost a QWindow per scrub on precisely
+    /// the machines already paying for a readback. A counter rather than a
+    /// stopwatch, so the regression is deterministic.
+    [[nodiscard]] int presentation_attempts() const noexcept { return attempts_; }
+
     /// True when frames go to a swapchain rather than through a readback.
     [[nodiscard]] bool is_presenting() const noexcept { return path_ == Path::presenting; }
 
@@ -127,6 +134,7 @@ private:
     QImage picture_;
     QString status_;
     QString refusal_;
+    int attempts_ = 0;
     Path path_ = Path::unknown;
     std::int64_t frame_ = -1;  ///< -1 so the first show_frame(0) is not a no-op.
 };

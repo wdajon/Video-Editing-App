@@ -120,6 +120,22 @@ TEST_F(ProgramPanelOnMedia, AStepAloneAsksToPresent) {
         << "a step rendered a frame but never asked to present";
 }
 
+TEST_F(ProgramPanelOnMedia, ItAsksToPresentOnceAndThenStopsAsking) {
+    // `attach_surface` is on the per-frame path now, and on a machine that
+    // cannot present the answer never changes -- so a retry would build and
+    // destroy a QWindow for every frame of a scrub. A counter rather than a
+    // stopwatch: deterministic, and immune to how fast the machine is.
+    for (int i = 0; i < 5; ++i) {
+        step();
+    }
+    const ProgramPanel* panel = window_->program_panel();
+    if (panel->path() == ProgramPanel::Path::unknown) {
+        GTEST_SKIP() << "no picture rendered: " << panel->status().toStdString();
+    }
+    EXPECT_EQ(panel->presentation_attempts(), 1)
+        << "five frames asked for a surface " << panel->presentation_attempts() << " times";
+}
+
 TEST_F(ProgramPanelOnMedia, TheDockTitleFollowsTheRoute) {
     step();
 
