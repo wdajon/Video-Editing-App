@@ -235,7 +235,7 @@ int main(int argc, char** argv) {
 
     std::vector<double> samples;
     samples.reserve(static_cast<std::size_t>(frames));
-    const std::int64_t materialised_before = renderer.value().frames_materialised();
+    const std::int64_t decoded_before = renderer.value().frames_decoded();
     for (int frame = 0; frame < frames; ++frame) {
         const auto started = Clock::now();
         std::string failure;
@@ -257,8 +257,8 @@ int main(int argc, char** argv) {
         }
         samples.push_back(milliseconds(finished - started));
     }
-    const std::int64_t materialised =
-        renderer.value().frames_materialised() - materialised_before;
+    const std::int64_t decoded =
+        renderer.value().frames_decoded() - decoded_before;
 
     const double p50 = percentile(samples, 0.50);
     const double p99 = percentile(samples, 0.99);
@@ -269,8 +269,8 @@ int main(int argc, char** argv) {
     // decoded frame per rendered frame per layer is the floor; anything above it
     // is a seek decoding forward from a keyframe.
     std::printf("decoded   %lld frames for %d rendered (%.1f per frame, floor %d)\n",
-                static_cast<long long>(materialised), frames,
-                static_cast<double>(materialised) / frames, layers);
+                static_cast<long long>(decoded), frames,
+                static_cast<double>(decoded) / frames, layers);
     std::printf("frame ms  p50 %.2f  p99 %.2f  max %.2f  (budget %.2f)\n", p50, p99, worst,
                 kBudget);
     std::printf("sustained 30 fps: %s\n", p99 <= kBudget ? "PASS" : "FAIL");

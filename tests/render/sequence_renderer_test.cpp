@@ -164,11 +164,10 @@ TEST_F(RendererTest, GivesEachClipItsOwnDecoderEvenWhenTheyShareAFile) {
 TEST_F(RendererTest, PlayingForwardDoesNotSeek) {
     // The counter that would have caught the defect this replaced.
     //
-    // `frames_materialised` could not: M1 optimised the decoder to stop copying
-    // frames a seek discards, so a seek decoding a hundred frames still
-    // materialises one. Neither could `frames_decoded`. Rendering consecutive
-    // frames looked identical on both counters whether it seeked or not, and it
-    // was seeking -- 23.5 of every 29.2 ms. Count the thing itself.
+    // Neither `frames_decoded` nor the decoder's own `frames_materialised` could:
+    // a seek decodes forward from a keyframe and hands out one frame, so both
+    // read a healthy 1.0 per frame whether it seeked or not -- and it was
+    // seeking, 23.5 of every 29.2 ms. Count the thing itself.
     SequenceRenderer renderer = make_renderer();
     const Document document = one_clip();
 
@@ -290,11 +289,11 @@ TEST_F(RendererTest, DecodesExactlyOneFrameWhenPlayingForward) {
     const Document document = one_clip();
     ASSERT_TRUE(renderer.render_to_texture(document, 0).has_value());
 
-    const std::int64_t before = renderer.frames_materialised();
+    const std::int64_t before = renderer.frames_decoded();
     for (std::int64_t frame = 1; frame <= 10; ++frame) {
         ASSERT_TRUE(renderer.render_to_texture(document, frame).has_value());
     }
-    EXPECT_EQ(renderer.frames_materialised() - before, 10)
+    EXPECT_EQ(renderer.frames_decoded() - before, 10)
         << "ten consecutive frames must cost ten decodes";
 }
 

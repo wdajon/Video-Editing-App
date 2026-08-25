@@ -169,7 +169,7 @@ public:
 
     [[nodiscard]] std::int64_t seeks() const noexcept { return seeks_; }
 
-    [[nodiscard]] std::int64_t frames_materialised() const noexcept {
+    [[nodiscard]] std::int64_t frames_decoded() const noexcept {
         std::int64_t total = 0;
         for (const auto& [path, open] : decoders_) {
             total += open.decoder.frames_decoded();
@@ -263,8 +263,8 @@ std::size_t SequenceRenderer::open_sources() const noexcept {
     return impl_->open_sources();
 }
 
-std::int64_t SequenceRenderer::frames_materialised() const noexcept {
-    return impl_->frames_materialised();
+std::int64_t SequenceRenderer::frames_decoded() const noexcept {
+    return impl_->frames_decoded();
 }
 
 std::int64_t SequenceRenderer::seeks() const noexcept {
