@@ -8,55 +8,56 @@ Repository: https://github.com/wdajon/Video-Editing-App (public)
 
 ---
 
-## READ THIS FIRST: most of M4 is not on `main`
+## READ THIS FIRST: M4 is on `main`, and one thing still blocks it
 
-`main` is at **M4 iteration 3**. Eighteen further commits live on branches, none
-merged.
+`main` is at **M4 iteration 17**, all of it CI-verified. PR #4 and PR #5 landed
+on 2026-08-25 with all six jobs green, which closed the nineteen-day gap where
+iterations 4–17 had only ever been compiled by MSVC. `m4-command-map` and
+`m4-qt-panels` are merged; nothing is waiting on a branch.
 
-| Branch | Contains | State |
-|---|---|---|
-| `main` | through M4 i3 (linked clips) | last merged point |
-| `m4-command-map` | i4 — the command map | **PR #4**, all six jobs green 2026-08-25 |
-| `m4-qt-panels` | i5–i17 — panels, workspaces, JKL, mouse, Adobe bindings, Tools strip, the render path, the Program panel, the device-resident preview, seek-free playback, the presenting surface, the route report | stacked on `m4-command-map`, **PR #5**, all six jobs green 2026-08-25 |
-
-```powershell
-git checkout m4-qt-panels   # everything described below lives here
-```
-
-**The Actions outage is over.** It began 2026-08-06 and was resolved well before
-2026-08-25; the status API reports the Actions component operational. The reason
-no run appeared for nineteen days is separate and worth knowing: `ci.yml` fires
-only on a push to `main` and a PR targeting `main`, and PR #4 was opened at
-21:04 on 2026-08-06 — mid-outage — so its `pull_request` event was dropped and
-never redelivered. There is **no `workflow_dispatch`**, so CI cannot be started
-from the CLI. To fire it, reopen the PR (`gh pr close N && gh pr reopen N`), push
-a commit to the branch, or open another PR.
-
-**Do not merge either branch until CI is green on the branch itself.** Check
-with:
+**One thing blocks calling M4 done, and it is not code: the project owner has
+not looked at the panel.** M3's gate needed the same, for the same reason — the
+Timeline panel's painting has no oracle (D23) and presentation has none
+(ADR 008). Run it:
 
 ```powershell
-gh run list --limit 5
+.\build\windows-release\bin\reelforge.exe --demo-timeline
 ```
 
-Merge `m4-command-map` first so the stack lands in order.
+Do **not** start M5 before that. The milestone ladder is not advisory (see
+`docs/MISSION.md`).
+
+### How to fire CI, because it is not obvious
+
+`ci.yml` fires only on a push to `main` and on a PR targeting `main`. There is
+**no `workflow_dispatch`**, so CI cannot be started from the CLI. To fire it:
+push to a PR branch, open a PR, or reopen one (`gh pr close N && gh pr reopen N`).
+
+That mattered once and will again. The Actions outage of 2026-08-06 was resolved
+within days, but no run appeared here for nineteen days — because PR #4 had been
+opened at 21:04 that day, mid-outage, so its `pull_request` event was dropped and
+never redelivered. A session read "no runs" as "CI is still down". It was not.
 
 ### What CI found the moment it ran, and what it means for MSVC
 
-Two errors so far, on code that green MSVC builds had passed. **They arrived one
-at a time**: ninja stops at the first failure, so each fix is what lets the build
-reach the next. Expect that to continue — a green Linux job is the only evidence
-that there is not a third.
+Three findings, on code that green MSVC builds had passed. **They arrived one at
+a time**: ninja stops at the first failure and a binary that will not link cannot
+be run, so each fix is what let the build reach the next. Three cycles, one
+finding each — a green Linux job is the only evidence that there is not a fourth.
 
 ```
 tests/timeline/trim_fuzz_test.cpp:255: error: enumeration value 'nudge'
     not handled in switch [-Werror,-Wswitch]
 tests/app/timeline_panel_test.cpp:175: error: implicit conversion loses integer
     precision: 'qsizetype' to 'const int' [-Werror,-Wshorten-64-to-32]
+LeakSanitizer: 128 byte(s) leaked  <- the Vulkan loader (D12), in five app tests
+    that had already printed [  PASSED  ]
 ```
 
-Both are fixed in i17, and the first came with a real coverage gap behind it —
-`nudge` had never been in the trim fuzz's `kKinds` at all.
+All fixed in i17. The first came with a real coverage gap behind it — `nudge` had
+never been in the trim fuzz's `kKinds` at all — and the third was not a defect at
+all: the Program panel brings up a device, so its tests became the third suite to
+need the loader suppression `rf_gpu_tests` and `rf_render_tests` already had.
 
 **One of the two classes can be caught here, and one cannot. That was measured,
 not assumed.**
@@ -72,17 +73,6 @@ not assumed.**
 
 So: **a green MSVC build is not evidence about narrowing.** Only the Linux jobs
 are. Same for `-Wold-style-cast` and the rest of the GCC/Clang set.
-
-### What to do first
-
-1. **Get both PRs green and merge them in order**, `m4-command-map` then
-   `m4-qt-panels`. Nothing else should merge before that.
-2. **Ask the project owner to run `--demo-timeline`** and say whether the panel
-   behaves. M4 cannot be called done without it, the same way M3 could not.
-   D23 is why: the panel's painting has no oracle.
-
-Do **not** start M5 until that is cleared. The milestone ladder is not advisory
-(see `docs/MISSION.md`).
 
 ### The presenting path runs; nobody has watched it (D30)
 
@@ -103,7 +93,7 @@ meaning nothing. Underneath it, `refresh_playhead` was also the only caller of
 `attach_surface`, so a session that never pressed J, K or L never asked whether
 the machine could present at all.
 
-On the reference machine the presenting branch **is** taken:
+On the reference machine the presenting branch **is** taken, on the code that is now on `main`:
 
 ```powershell
 .\build\windows-release\bin\reelforge.exe --demo-timeline --screenshot out.png
@@ -124,7 +114,7 @@ there is still unverified** (ADR 008) and still needs the owner.
 | M1 — probe, decode, frame-accurate seek | **Gate met.** 200/200 random seeks correct on a 10-min 4K file. Performance budget **not** met — see D9. |
 | M2 — timeline model + undo/redo | **Gate met.** 10,000-operation fuzz, undo returns byte-identical. |
 | M3 — GPU compositor + playback | **Gate met** 2026-08-05. 1800 frames presented, 0 dropped, p99 36.67 ms, confirmed visually by the project owner. See the caveats in `PROGRESS.md`. |
-| M4 — panels, docking, workspaces, JKL | **Iteration 17, on `m4-qt-panels`. Gate met mechanically on Windows** — the full trim set driven by `QTest::keyClick` on a real panel, plus JKL, a Tools strip, mouse editing and a working render path (ADR 009–019). **Not signed off by the owner**, which is the remaining blocker. CI runs again and is **green on both branches** (PR #4, PR #5), so iterations 4–17 have now been through GCC, Clang, ASan, UBSan and TSan. The Program panel presents through the swapchain where it can and reads back where it cannot, and the presenting branch is now known to execute on the reference machine — but not to have been *seen* (D30, ADR 008). |
+| M4 — panels, docking, workspaces, JKL | **Iteration 17, merged to `main` 2026-08-25. Gate met mechanically, CI green** — the full trim set driven by `QTest::keyClick` on a real panel, plus JKL, a Tools strip, mouse editing and a working render path (ADR 009–019), across all six jobs. **Not signed off by the owner**, which is the only remaining blocker. The Program panel presents through the swapchain where it can and reads back where it cannot; the presenting branch is known to *execute* on the reference machine but not to have been *seen* (D30, ADR 008). |
 | M5 onward | Not started. |
 
 Zero warnings at `/W4 /WX` and `-Wall -Wextra -Werror`.
@@ -171,12 +161,6 @@ Defender scanning binaries it has never seen. One retry distinguishes them.
 which times out on it.** Two sessions' worth of "the page could not be fetched"
 was a tooling mistake, not a property of the source. ADR 016 has the transcribed
 table; go back to the page for anything it does not cover.
-
-**One thing blocks calling M4 done, and it is not code.** The project owner has
-not signed off on the panel; its painting has no oracle (D23), exactly as
-presentation has none (ADR 008), so a person has to look at it — M3's gate needed
-the same. The other blocker, CI, is answered: it runs again, and getting the two
-PRs green and merged in order is mechanical work, not a wait.
 
 ### Seeing the editor run
 
