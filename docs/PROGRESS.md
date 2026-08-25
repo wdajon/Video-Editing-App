@@ -873,6 +873,22 @@ media = 92          playback = 40   render = 14   timeline = 141
 [trim fuzz] documents=200 applied=4324 refused=3676 crossed=344 straddled=1378 linked=190
 ```
 
+The preview budget re-measured on the reference machine, because the rule is
+every iteration and this one moved code onto the per-frame path:
+
+```
+scene:   1080x1920, 1 layer(s), 120 frames
+decoded  120 frames for 120 rendered (1.0 per frame, floor 1)
+frame ms p50 4.68  p99 5.38  max 16.76  (budget 33.33)   sustained 30 fps: PASS
+
+scene:   1080x1920, 3 layer(s), 120 frames
+decoded  360 frames for 120 rendered (3.0 per frame, floor 3)
+frame ms p50 13.94  p99 14.61  max 48.99  (budget 33.33)  sustained 30 fps: PASS
+```
+
+Against ADR 019's recorded 4.67 and 13.86, that is noise, and the decode counters
+are still at their floor — no seek crept back in.
+
 Both regressions were confirmed by reintroducing them: dropping the
 `attach_surface` call fails `AStepAloneAsksToPresent` and nothing else; restoring
 the ambiguous title fails the two title tests and nothing else; removing the
