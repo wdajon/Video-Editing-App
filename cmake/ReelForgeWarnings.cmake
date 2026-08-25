@@ -15,7 +15,13 @@ if(MSVC)
         /EHsc
         /w14242 /w14254 /w14263 /w14265 /w14287 /we4289 /w14296
         /w14311 /w14545 /w14546 /w14547 /w14549 /w14555 /w14619
-        /w14640 /w14826 /w14905 /w14906 /w14928)
+        /w14640 /w14826 /w14905 /w14906 /w14928
+        # C4062: a switch over an enum with no default that misses a value.
+        # GCC and Clang give this as -Wswitch under -Wall; MSVC leaves it off
+        # even at /W4, so an enum could grow a value and only CI would notice.
+        # It did: `nudge` reached the trim fuzz's switch through four green
+        # MSVC builds and failed every Linux job on the first run in weeks.
+        /w14062)
     if(RF_WARNINGS_AS_ERRORS)
         target_compile_options(rf_warnings INTERFACE /WX)
     endif()
