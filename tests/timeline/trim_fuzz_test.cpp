@@ -38,8 +38,12 @@ using rf::timeline::TrimKind;
 using rf::timeline::make_trim;
 using rf::timeline::serialise;
 
+// Every kind, and the completeness matters: `nudge` arrived with the Adobe
+// bindings and was left out of this list, so the one operation a user reaches
+// with a bare arrow key had no property coverage at all. Clang's -Wswitch found
+// it, in the switch below, which MSVC never complained about.
 constexpr TrimKind kKinds[] = {TrimKind::ripple_in, TrimKind::ripple_out, TrimKind::roll,
-                               TrimKind::slip, TrimKind::slide};
+                               TrimKind::slip,      TrimKind::slide,      TrimKind::nudge};
 
 /// Fills one track with butt-joined and gapped clips, each using a random window
 /// of a source longer than the window, so trims have room in both directions.
@@ -297,6 +301,24 @@ void check_operation_preserved_what_it_should(TrimKind kind, ClipId id, const Sn
             EXPECT_EQ(now->start, was->start);
             EXPECT_EQ(now->source_in, was->source_in);
             break;
+
+        case TrimKind::nudge:
+            // Free space absorbs all of it: the clip keeps its length and its
+            // content, and no neighbour gives anything up. That last part is
+            // what separates a nudge from a slide.
+            EXPECT_EQ(now->duration, was->duration);
+            EXPECT_EQ(now->source_in, was->source_in);
+            for (const Clip& clip : after.clips) {
+                if (clip.id != id) {
+                    EXPECT_EQ(clip, *find(before.clips, clip.id)) << "nudge touched another clip";
+                }
+            }
+            // With nothing beyond the clip, nothing holds the end of the
+            // sequence in place -- the same exception a slide has.
+            if (has_clip_after(before.clips, *was)) {
+                EXPECT_EQ(after.sequence_end, before.sequence_end);
+            }
+            break;
     }
 }
 
@@ -393,7 +415,8 @@ TEST(TrimFuzz, RandomTrimsNeverLeaveAnIllegalDocumentAndAlwaysUndo) {
                 check_ripple_moved_the_tail_rigidly(id, before, after);
                 check_sync_locked_tracks_kept_step(all_before, document, members, id, point);
             } else {
-                // Roll, slip and slide never reach a track that holds no member.
+                // Roll, slip, slide and nudge never reach a track that holds
+                // no member.
                 for (const Track& was : all_before) {
                     if (!holds_member(members, was.id)) {
                         EXPECT_EQ(*document.find_track(was.id), was)
@@ -410,7 +433,7 @@ TEST(TrimFuzz, RandomTrimsNeverLeaveAnIllegalDocumentAndAlwaysUndo) {
     }
 
     // A run that mostly refuses would exercise the limits and never the edits.
-    // Deterministic seeds, so these are fixed: 4393 applied against 3607
+    // Deterministic seeds, so these are fixed: 4324 applied against 3676
     // refused. The refusals are real -- a roll needs a butt-joined neighbour,
     // and a clip already pushed to its media limit has nowhere further to go.
     EXPECT_GT(applied, kDocuments * kTrimsPerDocument / 2)
