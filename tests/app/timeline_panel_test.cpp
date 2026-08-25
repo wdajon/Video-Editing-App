@@ -172,7 +172,7 @@ TEST(TimelinePanelTest, SignalsTheDocumentChangedOnlyWhenItDid) {
     QSignalSpy changed(&panel.widget, &TimelinePanel::document_changed);
 
     key(panel.widget, Qt::Key_B);  // selecting a tool is a change of state
-    const int after_tool = changed.count();
+    const qsizetype after_tool = changed.count();
     key(panel.widget, Qt::Key_Right, Qt::ControlModifier);
     EXPECT_GT(changed.count(), after_tool);
 }
