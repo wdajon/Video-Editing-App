@@ -5,29 +5,28 @@
 **Exit gate:** the full trim set (ripple/roll/slip/slide) driven by keyboard
 only.
 
-**Gate status: met mechanically on Windows, with two caveats outstanding.**
+**Gate status: met mechanically, CI green, one caveat outstanding.**
 
 ```
 TimelinePanelTest.TheWholeTrimSetAndBackAgainFromTheKeyboard
-100% tests passed, 0 tests failed out of 425     (windows-debug, clean tree)
-100% tests passed, 0 tests failed out of 425     (windows-release)
+100% tests passed, 0 tests failed out of 529     (windows-debug, clean tree)
+100% tests passed, 0 tests failed out of 529     (windows-release, clean tree)
 ```
 
 All four operations and undo, performed by `QTest::keyClick` on a focused
 `TimelinePanel` inside a real `QMainWindow`, on the offscreen platform. Nothing
 in that test calls the editor, the command map or `make_trim` directly.
 
-**The two caveats are not formalities.**
+**CI is no longer a caveat** (iteration 17). Both branches are green across the
+full six-job matrix, so iterations 4–17 have now been compiled by GCC and Clang
+and run under ASan, UBSan and TSan. Three real defects came out of that, none of
+which MSVC could see; they are in iteration 17 below.
 
-1. **CI has not run against any of this.** GitHub Actions was in a major outage
-   (webhooks throttled to ~15%) from iteration 4 onwards, so iterations 4 and 5
-   have only ever been compiled by MSVC. Every earlier milestone leaned on the
-   Linux/Clang and sanitizer jobs; this one has not had them.
-2. **Nobody has looked at it.** The panel's painting has no oracle (D23) — the
-   tests prove it does not crash and that it draws from the document, not that a
-   person sees a usable timeline. M3's gate required the project owner to watch
-   it run; the same applies here and has not happened. `reelforge --demo-timeline`
-   exists so it can.
+**The remaining caveat is not a formality. Nobody has looked at it.** The panel's
+painting has no oracle (D23) — the tests prove it does not crash and that it
+draws from the document, not that a person sees a usable timeline. M3's gate
+required the project owner to watch it run; the same applies here and has not
+happened. `reelforge --demo-timeline` exists so it can.
 
 **JKL now exists** (D21 resolved, iteration 6) and moves the playback clock and
 the drawn playhead. It does **not** move a picture (D25) — see below.
@@ -735,13 +734,181 @@ Reported as 440 rather than as a total that quietly omits the 81. Whether the
 swapchain path actually presents needs the project owner, exactly as M3's gate
 did — the dock title says which path is live.
 
+### Iteration 17 — the check that could not fail, and the switch nobody could see
+
+Resuming after nineteen days. Three things were true on arrival that the handoff
+did not know, and two of them were defects in what the handoff itself told the
+next session to do.
+
+**GitHub Actions recovered on its own; nothing had re-triggered it.** The status
+API reports the Actions component operational, and the 2026-08-06 incident is
+long resolved. The reason no run had appeared since 2026-08-06 12:56 UTC is that
+`ci.yml` fires only on a push to `main` and a PR targeting `main`, PR #4 was
+opened at 21:04 that day — mid-outage — so its `pull_request` event was dropped
+and never redelivered. There is no `workflow_dispatch`, so the only way to fire
+it is to reopen the PR or open another. Both were done.
+
+**D34 has lapsed.** `rf_app_tests.exe` runs again, through two clean rebuilds,
+with the Smart App Control policy unchanged (`VerifiedAndReputablePolicyState`
+is still 1). Nothing was done to earn that and nothing holds it, so the defect
+stays open — but the 81 app tests, and now 89, can be run here.
+
+**The sign-off the handoff asked for could not fail (D35).** It told the project
+owner to launch `--demo-timeline` and read the Program dock's title: plain
+"Program" means presenting, "Program (software preview)" means the readback. The
+dock was *constructed* titled `tr("Program")` — the identical string — and
+corrected only inside `refresh_playhead`, which runs on a shuttle change or the
+playhead timer and nothing else. Launch, scrub, trim, read the title: "Program",
+meaning nothing.
+
+Underneath it, worse: `refresh_playhead` was also the only caller of
+`attach_surface`. A session that scrubbed, stepped and trimmed but never pressed
+J, K or L never asked whether the machine could present at all — the swapchain
+path was simply dead — and then reported "software preview" for a question
+nobody had put.
+
+The fix is three states rather than a bool (`ProgramPanel::Path::unknown`,
+`presenting`, `readback`), one `MainWindow::refresh_program` that every route to
+a new picture goes through, and a title driven by a signal rather than read once:
+on a machine that can present the route changes **twice**, readback for the first
+frame and the swapchain once the surface is exposed. `presentation_refusal()`
+records why a surface could not be made — never shown, because the title already
+names the route, but without it "never attempted" and "attempted and refused" are
+the same picture and very different bugs.
+
+**And the presenting path now demonstrably runs.** On the reference machine, with
+the real Windows platform:
+
+```
+.\build\windows-release\bin\reelforge.exe --demo-timeline --screenshot out.png
+```
+
+captures a Program dock titled plain **"Program"** — which `refresh_program_title`
+writes only where `present()` has succeeded on a ready swapchain. That is the
+code path, not a pair of eyes: `QWidget::grab` cannot capture a native child
+window, so the panel area is black in that image. **Whether a person sees the
+picture is still unverified** (ADR 008), and it still needs the owner. But the
+question has moved from "does this path ever execute" to "does the picture look
+right", which is a much smaller one.
+
+The same command under `QT_QPA_PLATFORM=offscreen` shows the *readback* path
+painting a real decoded frame — testsrc2's burned-in counter reads `21` at
+playhead 1, as ADR 018 says it must.
+
+**A defect introduced and removed inside the iteration.** Moving `attach_surface`
+onto the per-frame path meant a machine that cannot present would build and
+destroy a `QWindow` for every frame of a scrub, asking a question whose answer is
+fixed for the life of the process. `presentation_attempts()` is a counter, not a
+stopwatch, so the regression is deterministic — five steps, one attempt.
+
+**The one thing CI found that MSVC never could (D36).** The first Linux run in
+nineteen days failed all four jobs on a single line:
+
+```
+tests/timeline/trim_fuzz_test.cpp:255:13: error: enumeration value 'nudge'
+    not handled in switch [-Werror,-Wswitch]
+```
+
+`TrimKind::nudge` arrived with the Adobe bindings in iteration 9 and never joined
+the fuzz's `kKinds`, so the one trim a user reaches with a bare `Alt+left` was
+the only one of six with no property coverage at all. Adding the missing `case`
+alone would have been a lie — a case for a value the generator never produces is
+dead code that looks like coverage — so the generator produces it and the
+property asserted is the one that separates a nudge from a slide: free space
+absorbs all of it, the clip keeps its length and its content, and no neighbour
+gives anything up. It passes.
+
+The reason four green MSVC builds said nothing is that **C4062 is off even at
+`/W4`**, while GCC and Clang give the same thing as `-Wswitch` under `-Wall`.
+`/w14062` closes that asymmetry, and it was checked rather than assumed: with the
+flag on, deleting the `nudge` case again fails the MSVC build with C4062 as an
+error, and a clean rebuild of both configurations is silent with the case in
+place.
+
+**The next error was standing behind the first, and its class cannot be closed
+the same way.** Ninja stops at the first failure, so fixing the switch is what
+let the Linux build reach:
+
+```
+tests/app/timeline_panel_test.cpp:175: error: implicit conversion loses integer
+    precision: 'qsizetype' to 'const int' [-Werror,-Wshorten-64-to-32]
+```
+
+`QSignalSpy::count()` returns `qsizetype`, and the line had narrowed it to `int`
+since it was written. The obvious follow-up — force the MSVC equivalents on too —
+was tried and **rejected on measurement**. `/w14244 /w14267` were added beside
+the `/w14242` already there, confirmed present on the file's command line in
+`compile_commands.json`, and a plain `const int x = <long long>` still compiled
+silently under `/W4 /WX` with a forced recompile. They caught nothing, so they
+were removed rather than kept as decoration.
+
+The conclusion is worth carrying: **a green MSVC build says nothing about
+narrowing.** Only the Linux jobs do.
+
+**Then ASan, which failed tests that had passed.** With the compile errors gone,
+Linux Debug, Release and TSan went green and ASan+UBSan reported five failures —
+all of them the new Program panel tests, all of them after `[  PASSED  ]`:
+
+```
+Direct leak of 128 byte(s) in 1 object(s) allocated from:
+    #15 vkEnumeratePhysicalDevices  (libvulkan.so.1)
+    #16 rf::gpu::Instance::enumerate_devices()  src/gpu/instance.cpp:219
+```
+
+That is D12 exactly — the Vulkan loader's one process-global allocation, freed
+only on library unload, which volk never performs — and it has been suppressed
+for `rf_gpu_tests` and `rf_render_tests` since M3. The Program panel brings up a
+device to render, so its tests are simply the third suite to meet it. Same narrow
+patterns, same `print_suppressions=1` so the log still says whether they match
+anything; blanket-disabling leak detection was rejected for the first two and is
+rejected here for the same reason.
+
+```
+100% tests passed, 0 tests failed out of 529     (windows-debug, clean tree)
+100% tests passed, 0 tests failed out of 529     (windows-release, clean tree)
+
+app = 89 (was 81)   core = 48   edit = 63   gpu = 42
+media = 92          playback = 40   render = 14   timeline = 141
+
+[trim fuzz] documents=200 applied=4324 refused=3676 crossed=344 straddled=1378 linked=190
+```
+
+Both regressions were confirmed by reintroducing them: dropping the
+`attach_surface` call fails `AStepAloneAsksToPresent` and nothing else; restoring
+the ambiguous title fails the two title tests and nothing else; removing the
+once-only guard fails the attempt counter and nothing else.
+
+**CI, for the first time against any of this.** Both PRs green, all six jobs
+each — Windows Debug and Release, Linux Debug and Release, ASan+UBSan, TSan:
+
+```
+completed  success  M4 i4: put the trim set on the keyboard          PR #4  24m13s
+completed  success  M4 i5-i16: panels, JKL, ... the Program monitor  PR #5  23m17s
+```
+
+Iterations 4–17 had never been compiled by GCC or Clang, and had never run under
+a sanitiser. They have now. Nothing is merged yet: `m4-command-map` goes first so
+the stack lands in order.
+
+Worth recording about the process rather than the code: **each Linux failure was
+hiding the next.** Ninja stops at the first error, so the run that found the
+missing `nudge` case could not also report the narrowing, and neither could
+report the ASan leak because the binary never linked. Three cycles, one finding
+each. A green Linux job is the only evidence that there is not a fourth.
+
 ### Next action
 
-There is a picture, and playback is still the gap: pressing `L` sweeps the
-playhead and the monitor cannot keep up at a real sequence size, because it reads
-back per frame. Routing it through the Vulkan path is the rest of D30.
+Two things remain before M4 can be called done, and neither has changed shape:
 
-Still not code I can write: CI against iterations 4–13, and the owner's sign-off.
+1. **CI green on the whole stack**, and the merge in order — `m4-command-map`
+   first, then `m4-qt-panels`.
+2. **The project owner looking at it.** That is now a smaller question than it
+   was: the presenting branch is known to execute, so what is left is whether
+   the picture and the panel are usable (D23). `--demo-timeline` exists for it.
+
+After that, D30's remaining half is sustained playback: the monitor renders one
+frame per scrub and decodes per frame, so pressing `L` still sweeps a playhead
+faster than a picture can follow.
 
 ## M3 — GPU compositor + Program monitor playback
 
