@@ -695,6 +695,46 @@ obviously right and was measurably wrong.
 mis-attribution; swscale is 1.42 ms of a 4.67 ms frame. The shader conversion is
 still worth having and nothing is blocked on it.
 
+### Iteration 16 — presenting through the swapchain
+
+The render engine sustains the gate workload; the Program panel did not, because
+a `QWidget` cannot paint a Vulkan texture and so read every frame back — about
+36 ms per frame at 1080x1920 on top of a 13.86 ms render.
+
+`ProgramSurface` is a `QWindow` owning a Vulkan surface, embedded in the panel
+with `QWidget::createWindowContainer`, presenting the composited texture through
+the swapchain M3 already built. Qt supplies only the surface (ADR 008). The
+readback path stays as the fallback, so a machine that cannot present still shows
+a picture — only slower — and the Program dock titles itself **"Program (software
+preview)"** when it does, because an 8x difference in cost should not be
+invisible.
+
+**This is implemented and unverified, and the second half matters.** Nobody has
+confirmed a frame reaches the screen through the swapchain:
+
+- The offscreen platform cannot create a Vulkan surface, so the automated tests
+  exercise the fallback and never the presenting path.
+- **This machine's Smart App Control now blocks `rf_app_tests.exe` outright**
+  (D34), so the 81 app tests could not run at all this iteration.
+
+What is verified: the other seven suites pass, the application launches and runs
+without crashing with a real display, and the offscreen render still produces the
+correct picture — the demo frame reads source frame `21` at playhead 1, as it
+should.
+
+```
+rf_core_tests      48      rf_timeline_tests  141
+rf_media_tests     92      rf_edit_tests       63
+rf_gpu_tests       42      rf_render_tests     14
+rf_playback_tests  40
+                          -> 440 passed, 0 failed
+rf_app_tests       81      -> BLOCKED by Smart App Control (D34)
+```
+
+Reported as 440 rather than as a total that quietly omits the 81. Whether the
+swapchain path actually presents needs the project owner, exactly as M3's gate
+did — the dock title says which path is live.
+
 ### Next action
 
 There is a picture, and playback is still the gap: pressing `L` sweeps the

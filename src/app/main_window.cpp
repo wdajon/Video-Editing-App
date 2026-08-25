@@ -103,7 +103,8 @@ MainWindow::MainWindow(QWidget* parent)
     // The picture at the playhead. It renders on demand rather than presenting
     // continuously, so it follows a scrub and a step but does not play -- see
     // the header for why that trade was made and what replaces it (D30).
-    auto* program_dock = new QDockWidget(tr("Program"), this);
+    program_dock_ = new QDockWidget(tr("Program"), this);
+    auto* program_dock = program_dock_;
     program_dock->setObjectName("rf_dock_program");
     program_panel_ = new ProgramPanel(document_, this);
     program_dock->setWidget(program_panel_);
@@ -287,6 +288,21 @@ void MainWindow::refresh_playhead(playback::Nanoseconds now) {
     }
     timeline_panel_->set_playhead_frame(frame.value());
     program_panel_->show_frame(frame.value());
+    // The device only exists after a frame has been rendered, and the surface
+    // needs the device -- so this is the first moment it can be built. It is a
+    // no-op once attached, and on a machine that cannot present.
+    program_panel_->attach_surface();
+
+    // Which path is live is worth saying: presenting and reading back differ by
+    // about 36 ms a frame at 1080x1920, so "why is this stuttering" has an
+    // answer on screen rather than needing a profiler.
+    if (program_dock_ != nullptr) {
+        const QString title =
+            program_panel_->is_presenting() ? tr("Program") : tr("Program (software preview)");
+        if (program_dock_->windowTitle() != title) {
+            program_dock_->setWindowTitle(title);
+        }
+    }
 }
 
 void MainWindow::save_workspace(const QString& name) {

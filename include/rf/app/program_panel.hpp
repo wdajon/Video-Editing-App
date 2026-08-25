@@ -20,12 +20,16 @@
 #include <QString>
 #include <QWidget>
 
+class QVBoxLayout;
+
 #include <cstdint>
 #include <memory>
 
 #include "rf/timeline/document.hpp"
 
 namespace rf::app {
+
+class ProgramSurface;
 
 class ProgramPanel : public QWidget {
     Q_OBJECT
@@ -57,12 +61,26 @@ public:
     /// Vulkan device, where the panel says so rather than showing black.
     [[nodiscard]] bool can_render() const noexcept;
 
+    /// Builds the Vulkan surface and puts it in the layout, when this machine
+    /// can present. Separate from the constructor because it needs the device,
+    /// which is brought up lazily on the first frame with a clip under it.
+    ///
+    /// Does nothing where presentation is unavailable: the readback path keeps
+    /// working, only slower.
+    void attach_surface();
+
+    /// True when frames go to a swapchain rather than through a readback.
+    [[nodiscard]] bool is_presenting() const noexcept;
+
 protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
     class Impl;
     std::unique_ptr<Impl> impl_;
+    ProgramSurface* surface_ = nullptr;
+    QWidget* container_ = nullptr;
+    QVBoxLayout* layout_ = nullptr;
     QImage picture_;
     QString status_;
     std::int64_t frame_ = -1;  ///< -1 so the first show_frame(0) is not a no-op.
