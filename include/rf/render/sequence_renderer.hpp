@@ -83,24 +83,24 @@ public:
     /// make scrubbing unusable and would not show up as anything but slowness.
     [[nodiscard]] std::size_t open_sources() const noexcept;
 
-    /// Frames the decoders have actually materialised, across every source.
+    /// Frames the decoders have handed out, across every source.
     ///
-    /// A counter rather than a stopwatch, for the reason M1 recorded: it is
-    /// deterministic, immune to timing noise, and it answers the question a
-    /// stopwatch only hints at -- whether a "render one frame" call decoded one
-    /// frame or a hundred of them because it seeked. See `SeekCost` in
-    /// tests/media/seek_test.cpp for the same technique catching the same class
-    /// of regression.
-    [[nodiscard]] std::int64_t frames_materialised() const noexcept;
+    /// One per layer per rendered frame is the floor. **It does not report the
+    /// cost of a seek**, and it was believed to for two iterations: a seek
+    /// decodes forward from a keyframe without handing those frames out, so this
+    /// reads a healthy 1.0 per frame whether or not 23.5 ms went into getting
+    /// there. `seeks()` is the counter for that question. Kept because it still
+    /// answers its own one -- whether a frame was delivered per frame asked for.
+    [[nodiscard]] std::int64_t frames_decoded() const noexcept;
 
     /// Seeks performed. The counter that matters for playback: a seek is
     /// frame-accurate and therefore expensive (p50 23.5 ms at 1080x1920), and
     /// playing forward should need none after the first.
     ///
-    /// `frames_materialised` cannot answer this -- M1 optimised the decoder to
-    /// stop copying frames a seek discards, so a seek that decodes a hundred
-    /// frames still materialises one. A counter is only as good as the question
-    /// it is asked.
+    /// Neither `frames_decoded` nor the decoder's own `frames_materialised` can
+    /// answer this: a seek decodes forward from a keyframe and hands out one
+    /// frame, so both read 1.0 per frame while 80% of the time disappears. A
+    /// counter is only as good as the question it is asked.
     [[nodiscard]] std::int64_t seeks() const noexcept;
 
 private:
