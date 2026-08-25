@@ -10,47 +10,109 @@ Repository: https://github.com/wdajon/Video-Editing-App (public)
 
 ## READ THIS FIRST: most of M4 is not on `main`
 
-`main` is at **M4 iteration 3**. Thirteen further commits live on branches, none
-merged, because **GitHub Actions has been in a major outage since 2026-08-06
-15:22 UTC** and nothing has been verified on anything but MSVC.
+`main` is at **M4 iteration 3**. Eighteen further commits live on branches, none
+merged.
 
 | Branch | Contains | State |
 |---|---|---|
-| `main` | through M4 i3 (linked clips) | last CI-verified point |
-| `m4-command-map` | i4 — the command map | **PR #4 open**, CI never ran |
-| `m4-qt-panels` | i5–i16 — panels, workspaces, JKL, mouse, Adobe bindings, Tools strip, the render path, the Program panel, the device-resident preview, seek-free playback, the presenting surface | stacked on `m4-command-map`, **no PR** |
+| `main` | through M4 i3 (linked clips) | last merged point |
+| `m4-command-map` | i4 — the command map | **PR #4**, all six jobs green 2026-08-25 |
+| `m4-qt-panels` | i5–i17 — panels, workspaces, JKL, mouse, Adobe bindings, Tools strip, the render path, the Program panel, the device-resident preview, seek-free playback, the presenting surface, the route report | stacked on `m4-command-map`, **PR #5**, all six jobs green 2026-08-25 |
 
 ```powershell
 git checkout m4-qt-panels   # everything described below lives here
 ```
 
-**Do not merge either branch until CI is green on it.** Iterations 4–16 have
-never been compiled by GCC or Clang and have never run under ASan, UBSan or
-TSan; every earlier milestone leaned on those jobs. Check with:
+**The Actions outage is over.** It began 2026-08-06 and was resolved well before
+2026-08-25; the status API reports the Actions component operational. The reason
+no run appeared for nineteen days is separate and worth knowing: `ci.yml` fires
+only on a push to `main` and a PR targeting `main`, and PR #4 was opened at
+21:04 on 2026-08-06 — mid-outage — so its `pull_request` event was dropped and
+never redelivered. There is **no `workflow_dispatch`**, so CI cannot be started
+from the CLI. To fire it, reopen the PR (`gh pr close N && gh pr reopen N`), push
+a commit to the branch, or open another PR.
+
+**Do not merge either branch until CI is green on the branch itself.** Check
+with:
 
 ```powershell
-gh run list --limit 3
+gh run list --limit 5
 ```
 
-If runs are appearing again, push `m4-qt-panels`, open a PR into `main` (CI fires
-only on `main` pushes and PRs targeting `main`), and merge `m4-command-map` first
-so the stack lands in order.
+Merge `m4-command-map` first so the stack lands in order.
+
+### What CI found the moment it ran, and what it means for MSVC
+
+Two errors so far, on code that green MSVC builds had passed. **They arrived one
+at a time**: ninja stops at the first failure, so each fix is what lets the build
+reach the next. Expect that to continue — a green Linux job is the only evidence
+that there is not a third.
+
+```
+tests/timeline/trim_fuzz_test.cpp:255: error: enumeration value 'nudge'
+    not handled in switch [-Werror,-Wswitch]
+tests/app/timeline_panel_test.cpp:175: error: implicit conversion loses integer
+    precision: 'qsizetype' to 'const int' [-Werror,-Wshorten-64-to-32]
+```
+
+Both are fixed in i17, and the first came with a real coverage gap behind it —
+`nudge` had never been in the trim fuzz's `kKinds` at all.
+
+**One of the two classes can be caught here, and one cannot. That was measured,
+not assumed.**
+
+- *Missing enum case.* MSVC leaves C4062 off even at `/W4`. `/w14062` is now in
+  `cmake/ReelForgeWarnings.cmake`; deleting the `nudge` case again fails the
+  MSVC build with `C4062` as an error, so the flag does what it claims.
+- *Narrowing conversion.* MSVC does **not** diagnose it. `/w14244 /w14267` were
+  tried alongside the `/w14242` already present, verified in
+  `compile_commands.json` as reaching the file, and a plain
+  `const int x = <long long>` still compiled silently under `/W4 /WX`. They were
+  removed rather than kept as decoration.
+
+So: **a green MSVC build is not evidence about narrowing.** Only the Linux jobs
+are. Same for `-Wold-style-cast` and the rest of the GCC/Clang set.
 
 ### What to do first
 
-1. **Check whether CI has recovered** and, if so, get iterations 4–16 through it.
-   Nothing should merge before that.
+1. **Get both PRs green and merge them in order**, `m4-command-map` then
+   `m4-qt-panels`. Nothing else should merge before that.
 2. **Ask the project owner to run `--demo-timeline`** and say whether the panel
    behaves. M4 cannot be called done without it, the same way M3 could not.
-3. **Confirm the presenting path actually presents (D30).** It is implemented
-   and nothing has verified it: the offscreen platform cannot make a Vulkan
-   surface, and Smart App Control blocks the app test binary here (D34). Launch
-   `--demo-timeline` on a real display and look at the Program dock's title — it
-   says **"Program (software preview)"** when it fell back to the readback, and
-   plain **"Program"** when it is presenting.
+   D23 is why: the panel's painting has no oracle.
 
-Do **not** start M5 until M4's two blockers above are cleared. The milestone
-ladder is not advisory (see `docs/MISSION.md`).
+Do **not** start M5 until that is cleared. The milestone ladder is not advisory
+(see `docs/MISSION.md`).
+
+### The presenting path runs; nobody has watched it (D30)
+
+The Program dock titles itself by which route carried the last frame, and the
+three titles are distinct on purpose:
+
+| Title | Meaning |
+|---|---|
+| **Program** | The frame was blitted into a swapchain image and presented. |
+| **Program (software preview)** | Rendered, then read back off the device and painted by the widget — about 36 ms a frame more at 1080x1920. |
+| **Program (no picture)** | Nothing has rendered, so no route is live. |
+
+**This check used to be worthless and now is not** (D35). Until i17 the dock was
+*constructed* titled "Program" — the exact string that means presenting — and was
+corrected only inside `refresh_playhead`, which runs on a shuttle change or the
+playhead timer and nothing else. Launch, scrub, trim, read the title: "Program",
+meaning nothing. Underneath it, `refresh_playhead` was also the only caller of
+`attach_surface`, so a session that never pressed J, K or L never asked whether
+the machine could present at all.
+
+On the reference machine the presenting branch **is** taken:
+
+```powershell
+.\build\windows-release\bin\reelforge.exe --demo-timeline --screenshot out.png
+```
+
+writes a PNG whose Program dock reads plain **"Program"**. That is the code path,
+not a pair of eyes — `QWidget::grab` cannot capture a native child window, so the
+panel area is black in that image. **Whether a person sees a correct picture
+there is still unverified** (ADR 008) and still needs the owner.
 
 ---
 
@@ -62,7 +124,7 @@ ladder is not advisory (see `docs/MISSION.md`).
 | M1 — probe, decode, frame-accurate seek | **Gate met.** 200/200 random seeks correct on a 10-min 4K file. Performance budget **not** met — see D9. |
 | M2 — timeline model + undo/redo | **Gate met.** 10,000-operation fuzz, undo returns byte-identical. |
 | M3 — GPU compositor + playback | **Gate met** 2026-08-05. 1800 frames presented, 0 dropped, p99 36.67 ms, confirmed visually by the project owner. See the caveats in `PROGRESS.md`. |
-| M4 — panels, docking, workspaces, JKL | **Iteration 16, on `m4-qt-panels`. Gate met mechanically on Windows** — the full trim set driven by `QTest::keyClick` on a real panel, plus JKL, a Tools strip, mouse editing and a working render path (ADR 009–019). **Not confirmed by CI** and **not signed off by the owner**. The Program panel presents through the swapchain where it can, and falls back to a readback where it cannot — the presenting path is **unverified** (D30, D34). |
+| M4 — panels, docking, workspaces, JKL | **Iteration 17, on `m4-qt-panels`. Gate met mechanically on Windows** — the full trim set driven by `QTest::keyClick` on a real panel, plus JKL, a Tools strip, mouse editing and a working render path (ADR 009–019). **Not signed off by the owner**, which is the remaining blocker. CI runs again and is **green on both branches** (PR #4, PR #5), so iterations 4–17 have now been through GCC, Clang, ASan, UBSan and TSan. The Program panel presents through the swapchain where it can and reads back where it cannot, and the presenting branch is now known to execute on the reference machine — but not to have been *seen* (D30, ADR 008). |
 | M5 onward | Not started. |
 
 Zero warnings at `/W4 /WX` and `-Wall -Wextra -Werror`.
@@ -77,39 +139,44 @@ fact. Get the number from the suite:
 ctest --preset windows-debug
 ```
 
-At M4 iteration 16 (2026-08-06, on `m4-qt-panels`) **440 of 521 could run**:
-core 48, media 92, timeline 141, edit 63, gpu 42, playback 40, render 14 — all
-passing. The 81 app tests were blocked by Smart App Control (D34), not failing. Treat it
-as a dated snapshot, not a claim about now.
+At M4 iteration 17 (2026-08-25, on `m4-qt-panels`) **529 of 529 passed** on a
+clean tree, in both configurations: app 89, core 48, media 92, timeline 141,
+edit 63, gpu 42, playback 40, render 14. Treat it as a dated snapshot, not a
+claim about now.
 
-**Windows Smart App Control blocks binaries on this machine, and as of M4 i16 it
-blocks `rf_app_tests.exe` outright (D34).** Symptom: `ctest` fails at discovery
-with *"Error running test executable ... Result: unknown error"*; run the binary
-directly and it says *"An Application Control policy has blocked this file"*.
-Enforcement is on (`VerifiedAndReputablePolicyState = 1` under
-`HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy`).
+**Windows Smart App Control blocked `rf_app_tests.exe` at M4 i16 and does not
+now (D34).** The 89 app tests run here again, through two clean rebuilds, with
+the policy unchanged — `VerifiedAndReputablePolicyState` is still 1 under
+`HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy`. Nothing was done to earn
+that, so nothing holds it: Smart App Control judges on reputation, which moves on
+its own. Expect it back.
 
-It is not a build fault: every other suite passes, `reelforge.exe` itself runs,
-and a copy of the blocked binary at another path is blocked too — so the
-judgement is on content, not location. Deleting the build directory cleared it
-twice and did **not** the third time. **The 81 app tests therefore cannot be run
-here**; run the rest directly and say so, rather than reporting a total that
-quietly excludes them:
+The symptom, if it returns: `ctest` fails at discovery with *"Error running test
+executable ... Result: unknown error"*, and the binary run directly says *"An
+Application Control policy has blocked this file"*. It is not a build fault —
+every other suite passes, `reelforge.exe` itself runs, and a copy of the blocked
+binary at another path is blocked too, so the judgement is on content rather than
+location. If it happens, run the rest directly and **say which suites were
+skipped**, rather than reporting a total that quietly excludes them:
 
 ```powershell
 foreach ($n in @('rf_core_tests','rf_media_tests','rf_gpu_tests','rf_playback_tests','rf_timeline_tests','rf_edit_tests','rf_render_tests')) { & ".\build\windows-debug\bin\$n.exe" }
 ```
+
+A separate and much milder thing that looks similar: a **first** `ctest` after a
+clean rebuild timed out at discovery once here and passed immediately on retry —
+Defender scanning binaries it has never seen. One retry distinguishes them.
 
 **Adobe's shortcut page is readable — through the browser tool, not `WebFetch`,
 which times out on it.** Two sessions' worth of "the page could not be fetched"
 was a tooling mistake, not a property of the source. ADR 016 has the transcribed
 table; go back to the page for anything it does not cover.
 
-**Two things block calling M4 done, and neither is code.** CI has never run
-against iterations 4–16 (see the top of this file). And the project owner has not
-signed off on the panel; its painting has no oracle (D23), exactly as
+**One thing blocks calling M4 done, and it is not code.** The project owner has
+not signed off on the panel; its painting has no oracle (D23), exactly as
 presentation has none (ADR 008), so a person has to look at it — M3's gate needed
-the same.
+the same. The other blocker, CI, is answered: it runs again, and getting the two
+PRs green and merged in order is mechanical work, not a wait.
 
 ### Seeing the editor run
 
@@ -320,10 +387,13 @@ Full detail in `docs/BACKLOG.md`. The ones that shape upcoming work:
   extraction stays confined to one module.
 - **D8** — every decoded frame is copied out of libav. Correct and portable, and
   too slow for the M3 playback budget. Needs a zero-copy path to the GPU.
-- **D30** — a timeline renders to a picture (`--render-frame`, ADR 018), but
-  nothing presents it *live*: the Program monitor is still outside the widget
-  tree, so pressing L moves only the playhead. The remaining half of D25, and
-  the next thing to build.
+- **D30** — the Program panel shows the picture at the playhead and presents it
+  through the swapchain where it can (confirmed to execute on the reference
+  machine, i17), but it renders one frame per scrub and decodes per frame, so it
+  does not *sustain* playback: pressing `L` still sweeps a playhead faster than a
+  picture can follow. The remaining half of D25.
+- **D35/D36** — both resolved in i17, and both are about a check that could not
+  fail. Worth reading in `BACKLOG.md` before writing another one.
 - **D23** — the Timeline panel's painting has no oracle. Tests prove it does not
   crash, not that anyone can use it.
 - **D20** — a 1/90000 tick base cannot express 23.976 fps, so such a project
@@ -375,3 +445,10 @@ These were arrived at the hard way and are visible throughout the codebase.
   success — two edits in this project were lost that way. Use editing tools that
   preserve encoding, and check the file afterwards rather than trusting an exit
   code.
+- **A Windows path written into a document through a shell heredoc will be
+  eaten.** `\build\windows-release` came out as a backspace, `uild`, a
+  backspace and `in` — twice, in two different files, because the backslashes
+  were consumed as escapes before the script ever ran. Build such strings from
+  `chr(92)` rather than from literals, and grep the result for control
+  characters afterwards; the damage is invisible in a diff summary and reads as
+  success.
