@@ -1,4 +1,6 @@
-# LeakSanitizer suppressions, applied ONLY to rf_gpu_tests.
+# LeakSanitizer suppressions, applied to the suites that bring up a Vulkan
+# device: rf_gpu_tests, rf_render_tests and rf_app_tests. Nothing else gets
+# them.
 #
 # The Vulkan loader allocates process-global state on first use -- its ICD list
 # and layer manifests -- and frees it when the library is unloaded. volk opens

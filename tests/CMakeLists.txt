@@ -189,7 +189,15 @@ if(RF_BUILD_APP)
     # copied explicitly, rather than a second windeployqt run that would race.
     rf_deploy_qt_module(rf_app_tests Qt6::Test)
 
+    # Shares rf_gpu's Vulkan loader suppression. The Program panel brings up a
+    # device to render the picture at the playhead, so these are now the third
+    # suite to dlopen the loader and meet its one process-global allocation
+    # (D12). Without this the panel's tests pass and then LSan fails them at
+    # exit, which reads as a defect in the panel and is not one.
     gtest_discover_tests(rf_app_tests
         DISCOVERY_MODE PRE_TEST
-        PROPERTIES LABELS "app")
+        PROPERTIES
+            LABELS "app"
+            ENVIRONMENT
+                "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan-suppressions.txt:print_suppressions=1")
 endif()
